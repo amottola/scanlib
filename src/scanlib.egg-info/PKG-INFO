@@ -1,0 +1,116 @@
+Metadata-Version: 2.4
+Name: scanlib
+Version: 0.1.0
+Summary: A multiplatform document scanning library for Python
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: python-sane; sys_platform == "linux"
+Requires-Dist: pytwain; sys_platform == "win32"
+Requires-Dist: pyobjc-framework-ImageCaptureCore; sys_platform == "darwin"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-timeout; extra == "dev"
+Dynamic: license-file
+
+# scanlib
+
+A multiplatform document scanning library for Python.
+
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends:
+
+- **Windows**: [pytwain](https://pypi.org/project/pytwain/) (TWAIN)
+- **macOS**: [pyobjc-framework-ImageCaptureCore](https://pypi.org/project/pyobjc-framework-ImageCaptureCore/)
+- **Linux**: [python-sane](https://pypi.org/project/python-sane/) (SANE)
+
+## Installation
+
+```bash
+pip install scanlib
+```
+
+The appropriate platform-specific backend is installed automatically.
+
+## Usage
+
+```python
+import scanlib
+from scanlib import ColorMode, ScanSource, PageSize
+
+# List available scanners
+scanners = scanlib.list_scanners()
+for s in scanners:
+    print(f"{s.name} ({s.vendor} {s.model})")
+    print(f"  Sources: {[src.value for src in s.sources]}")
+
+# Scan a document (uses the first available scanner)
+doc = scanlib.scan()
+
+# Save the scanned image (PNG format)
+with open("scan.png", "wb") as f:
+    f.write(doc.data)
+
+# Scan with options
+doc = scanlib.scan(dpi=600, color_mode=ColorMode.GRAY)
+
+# Scan from a specific scanner and source
+doc = scanlib.scan(scanner=scanners[0], source=ScanSource.FEEDER)
+
+# Scan with a specific page size (A4, in 1/10 mm)
+doc = scanlib.scan(page_size=PageSize(2100, 2970))
+
+# Available sources are on each ScannerInfo
+print(scanners[0].sources)  # e.g. [ScanSource.FLATBED, ScanSource.FEEDER]
+```
+
+## API
+
+### `scanlib.list_scanners() -> list[ScannerInfo]`
+
+Returns a list of available scanners on the current platform.
+
+### `scanlib.scan(scanner=None, *, dpi=300, color_mode=ColorMode.COLOR, page_size=None, source=None) -> ScannedDocument`
+
+Scans a document and returns a `ScannedDocument`. If no scanner is specified, the first available scanner is used.
+
+**Parameters:**
+- `scanner` — A `ScannerInfo` object, or `None` to use the first available scanner.
+- `dpi` — Resolution in dots per inch (default: 300).
+- `color_mode` — A `ColorMode` value (default: `ColorMode.COLOR`).
+- `page_size` — A `PageSize` in 1/10 millimeters, or `None` to autodetect.
+- `source` — A `ScanSource` value, or `None` for device default.
+
+### `ColorMode`
+
+Enum with values: `COLOR`, `GRAY`, `BW`.
+
+### `ScanSource`
+
+Enum with values: `FLATBED`, `FEEDER`.
+
+### `PageSize`
+
+- `width: float` — Width in 1/10 millimeters.
+- `height: float` — Height in 1/10 millimeters.
+
+### `ScannedDocument`
+
+- `data: bytes` — Raw PNG image data.
+- `width: int` — Image width in pixels.
+- `height: int` — Image height in pixels.
+- `dpi: int` — Scan resolution.
+- `color_mode: ColorMode` — Color mode used for the scan.
+- `scanner: ScannerInfo` — The scanner that produced this document.
+
+### `ScannerInfo`
+
+- `name: str` — Scanner identifier.
+- `vendor: str | None` — Scanner vendor/manufacturer.
+- `model: str | None` — Scanner model name.
+- `backend: str` — Backend used (`"sane"`, `"twain"`, or `"imagecapture"`).
+- `sources: list[ScanSource]` — Available scan sources.
+
+## License
+
+MIT

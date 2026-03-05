@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scanlib"
+version = "0.1.0"
+description = "A multiplatform document scanning library for Python"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "python-sane; sys_platform == 'linux'",
+    "pytwain; sys_platform == 'win32'",
+    "pyobjc-framework-ImageCaptureCore; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-timeout"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

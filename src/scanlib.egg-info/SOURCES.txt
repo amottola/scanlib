@@ -1,0 +1,16 @@
+LICENSE
+README.md
+pyproject.toml
+src/scanlib/__init__.py
+src/scanlib/_types.py
+src/scanlib.egg-info/PKG-INFO
+src/scanlib.egg-info/SOURCES.txt
+src/scanlib.egg-info/dependency_links.txt
+src/scanlib.egg-info/requires.txt
+src/scanlib.egg-info/top_level.txt
+src/scanlib/backends/__init__.py
+src/scanlib/backends/_macos.py
+src/scanlib/backends/_sane.py
+src/scanlib/backends/_twain.py
+tests/test_resolve.py
+tests/test_types.py
