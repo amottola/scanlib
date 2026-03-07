@@ -54,12 +54,17 @@ Backends produce `ScannedPage` objects containing raw PNG bytes. `_pdf.py` parse
 
 ### Multi-page scanning
 
-- **Feeder**: backends loop automatically (SANE detects "no docs" error, TWAIN checks `more_pending` flag, macOS receives all pages in one `requestScan()` with page boundaries detected by `dataStartRow` resetting to 0)
+- **Feeder**: backends loop automatically (SANE detects "no docs" error, TWAIN checks `more_pending` flag, macOS receives one file per page via `didScanToURL:`)
 - **Flatbed multi-page**: the `next_page` callback is called after each page; return `True` to scan another
 
-### macOS memory-based transfer
+### macOS file-based transfer
 
-The macOS backend uses `ICScannerTransferModeMemoryBased` with `didScanToBandData:` delegate callbacks. Band data is accumulated per-page in `_ScanDelegate`, then stitched into complete images by `_assemble_image()` which produces PNG-filter-prefixed data for `raw_to_png()`.
+The macOS backend uses `ICScannerTransferModeFileBased` — scanned pages are written to temporary files by ImageCaptureCore. The delegate receives file URLs via `scannerDevice:didScanToURL:`. A TIFF-to-PNG converter (`_tiff_to_png`) handles the output, supporting both uncompressed and LZW-compressed TIFFs. Temp files are cleaned up after reading.
+
+Key implementation details:
+- `setBitDepth_(8)` **must** be called on the functional unit before scanning — without it the scanner may complete instantly with no data
+- A **fresh delegate** is created for each scan in `_scan_pages_impl` — reusing the delegate from `_open_scanner_impl` (which goes through FU probing) causes `requestScan()` to complete instantly with no data
+- Session open has **retry logic** (up to 3 attempts with 2s delays) because network scanners may refuse reopening immediately after a close
 
 ## Conventions
 

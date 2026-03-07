@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import math
+import os
+import struct
+import tempfile
 import threading
 
 import ImageCaptureCore
 import objc
-from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSRunLoop
+from Foundation import (
+    NSDate,
+    NSDefaultRunLoopMode,
+    NSObject,
+    NSRunLoop,
+    NSURL,
+)
 
 from .._types import (
     ColorMode,
@@ -27,7 +36,7 @@ _ICC_SOURCE_MAP = {
 
 _SCAN_SOURCE_TO_ICC = {v: k for k, v in _ICC_SOURCE_MAP.items()}
 
-# ICScannerPixelDataType: 0=BW, 1=Gray, 2=RGB, 3=Palette, 4=CMY, 5=CMYK, 6=YUV, 7=YUVK, 8=CIEXYZ
+# ICScannerPixelDataType: 0=BW, 1=Gray, 2=RGB
 _COLOR_MODE_TO_PIXEL_DATA_TYPE = {
     ColorMode.BW: 0,
     ColorMode.GRAY: 1,
@@ -35,7 +44,7 @@ _COLOR_MODE_TO_PIXEL_DATA_TYPE = {
 }
 
 # ICScannerTransferMode
-_TRANSFER_MODE_MEMORY_BASED = 1
+_TRANSFER_MODE_FILE_BASED = 0
 
 
 def _measurement_factor(unit: int) -> float | None:
@@ -76,35 +85,23 @@ class _BrowserDelegate(ImageCaptureCore.NSObject):
         self._removed.append(device)
 
 
-class _ScanDelegate(ImageCaptureCore.NSObject):
-    """Delegate for ICScannerDevice to handle the full scan lifecycle."""
+class _ScanDelegate(NSObject):
+    """Delegate for ICScannerDevice to handle the full scan lifecycle.
+
+    Uses file-based transfer — scanned pages are written to temporary files
+    and their paths collected in :attr:`scan_urls`.
+    """
 
     def init(self):
         self = objc.super(_ScanDelegate, self).init()
         if self is None:
             return None
-        self.completed_pages = []
-        self._current_bands = []
-        self._current_width = 0
-        self._current_height = 0
-        self._current_bpc = 0
-        self._current_nc = 0
-        self._current_pdt = 0
+        self.scan_urls: list[str] = []
         self.error = None
         self._done = False
         self._session_open = False
+        self._session_closed = False
         return self
-
-    def _finish_page(self):
-        self.completed_pages.append((
-            self._current_bands,
-            self._current_width,
-            self._current_height,
-            self._current_bpc,
-            self._current_nc,
-            self._current_pdt,
-        ))
-        self._current_bands = []
 
     def device_didOpenSessionWithError_(self, device, error):
         if error:
@@ -113,18 +110,8 @@ class _ScanDelegate(ImageCaptureCore.NSObject):
         else:
             self._session_open = True
 
-    def scannerDevice_didScanToBandData_(self, device, data):
-        start_row = data.dataStartRow()
-        if start_row == 0 and self._current_bands:
-            self._finish_page()
-
-        raw = bytes(data.dataBuffer())
-        self._current_bands.append((start_row, data.dataNumRows(), data.bytesPerRow(), raw))
-        self._current_width = data.fullImageWidth()
-        self._current_height = data.fullImageHeight()
-        self._current_bpc = data.bitsPerComponent()
-        self._current_nc = data.numComponents()
-        self._current_pdt = data.pixelDataType()
+    def scannerDevice_didScanToURL_(self, device, url):
+        self.scan_urls.append(url.path())
 
     def scannerDevice_didCompleteScanWithError_(self, device, error):
         if error:
@@ -132,6 +119,9 @@ class _ScanDelegate(ImageCaptureCore.NSObject):
         self._done = True
 
     def device_didCloseSessionWithError_(self, device, error):
+        self._session_closed = True
+
+    def device_didReceiveStatusInformation_(self, device, info):
         pass
 
     def didRemoveDevice_(self, device):
@@ -221,67 +211,223 @@ def _read_defaults(device: object, sources: list[ScanSource]) -> ScannerDefaults
         return None
 
 
-def _assemble_image(
-    bands: list[tuple[int, int, int, bytes]],
-    width: int,
-    height: int,
-    bpc: int,
-    nc: int,
-    pdt: int,
-) -> tuple[bytes, int, int, int, int]:
-    """Assemble band data into a complete raw image with PNG filter bytes.
+# ---------------------------------------------------------------------------
+# TIFF → PNG conversion (handles uncompressed and LZW-compressed TIFFs)
+# ---------------------------------------------------------------------------
 
-    Returns (filtered_data, width, height, color_type, bit_depth).
+def _lzw_decompress(data: bytes) -> bytes:
+    """Decompress TIFF LZW data.
+
+    TIFF LZW uses MSB-first bit packing, 9-bit initial code size,
+    clear code 256, EOI code 257, and early code-size changes.
     """
-    pixel_row_bytes = width * nc * max(bpc // 8, 1)
+    CLEAR = 256
+    EOI = 257
 
-    # Allocate full image buffer
-    full_buf = bytearray(height * pixel_row_bytes)
+    buf = int.from_bytes(data, "big")
+    total_bits = len(data) * 8
+    bit_pos = 0
 
-    # Sort bands by start row and copy into buffer
-    for start_row, num_rows, bytes_per_row, raw in sorted(bands):
-        for r in range(num_rows):
-            row_idx = start_row + r
-            if row_idx >= height:
+    def read_bits(n: int) -> int:
+        nonlocal bit_pos
+        if bit_pos + n > total_bits:
+            return EOI
+        shift = total_bits - bit_pos - n
+        bit_pos += n
+        return (buf >> shift) & ((1 << n) - 1)
+
+    code_size = 9
+    next_code = 258
+    table: list[bytes] = [bytes([i]) for i in range(256)] + [b"", b""]
+
+    out = bytearray()
+
+    code = read_bits(code_size)
+    if code != CLEAR:
+        raise ScanError("TIFF LZW stream must start with CLEAR code")
+
+    code = read_bits(code_size)
+    if code == EOI:
+        return bytes(out)
+    if code >= len(table):
+        raise ScanError("Invalid LZW code")
+
+    prev = table[code]
+    out.extend(prev)
+
+    while True:
+        code = read_bits(code_size)
+        if code == EOI:
+            break
+        if code == CLEAR:
+            code_size = 9
+            next_code = 258
+            table = [bytes([i]) for i in range(256)] + [b"", b""]
+            code = read_bits(code_size)
+            if code == EOI:
                 break
-            src_off = r * bytes_per_row
-            dst_off = row_idx * pixel_row_bytes
-            full_buf[dst_off:dst_off + pixel_row_bytes] = (
-                raw[src_off:src_off + pixel_row_bytes]
-            )
+            prev = table[code]
+            out.extend(prev)
+            continue
 
-    # Map pixel data type to PNG color type
-    if pdt == 0:  # BW — 1-bit grayscale
-        color_type = 0
-        bit_depth = 1
-        packed_row = (width + 7) // 8
-        filtered = bytearray()
-        for y in range(height):
-            filtered.append(0)
-            filtered.extend(
-                full_buf[y * pixel_row_bytes:y * pixel_row_bytes + packed_row]
-            )
-    elif pdt == 1:  # Gray — 8-bit grayscale
-        color_type = 0
-        bit_depth = 8
-        filtered = bytearray()
-        for y in range(height):
-            filtered.append(0)
-            filtered.extend(
-                full_buf[y * pixel_row_bytes:(y + 1) * pixel_row_bytes]
-            )
-    else:  # RGB (2) and others — 8-bit RGB
-        color_type = 2
-        bit_depth = 8
-        filtered = bytearray()
-        for y in range(height):
-            filtered.append(0)
-            filtered.extend(
-                full_buf[y * pixel_row_bytes:(y + 1) * pixel_row_bytes]
-            )
+        if code < next_code:
+            entry = table[code]
+        elif code == next_code:
+            entry = prev + prev[:1]
+        else:
+            raise ScanError(f"Invalid LZW code {code} (next={next_code})")
 
-    return bytes(filtered), width, height, color_type, bit_depth
+        out.extend(entry)
 
+        if next_code < 4096:
+            if next_code < len(table):
+                table[next_code] = prev + entry[:1]
+            else:
+                table.append(prev + entry[:1])
+            next_code += 1
+            # TIFF LZW uses "early change": bump code size when
+            # next_code reaches the max for the current size.
+            if next_code >= (1 << code_size) - 1 and code_size < 12:
+                code_size += 1
+
+        prev = entry
+
+    return bytes(out)
+
+
+def _tiff_to_png(data: bytes) -> tuple[bytes, int, int]:
+    """Convert TIFF data to PNG.
+
+    Returns (png_bytes, width, height).  Handles the subset of TIFF
+    that ImageCaptureCore produces (uncompressed or LZW-compressed strips,
+    8-bit RGB/Gray).
+    """
+    if len(data) < 8:
+        raise ScanError("TIFF data too short")
+
+    le = data[:2] == b"II"
+    fmt = "<" if le else ">"
+
+    ifd_offset = struct.unpack(f"{fmt}I", data[4:8])[0]
+    num_entries = struct.unpack(f"{fmt}H", data[ifd_offset:ifd_offset + 2])[0]
+
+    tags: dict[int, int | tuple] = {}
+    for i in range(num_entries):
+        off = ifd_offset + 2 + i * 12
+        tag, typ, count = struct.unpack(f"{fmt}HHI", data[off:off + 8])
+        val_bytes = data[off + 8:off + 12]
+        if typ == 3 and count == 1:  # SHORT
+            tags[tag] = struct.unpack(f"{fmt}H", val_bytes[:2])[0]
+        elif typ == 4 and count == 1:  # LONG
+            tags[tag] = struct.unpack(f"{fmt}I", val_bytes)[0]
+        elif typ == 5 and count == 1:  # RATIONAL
+            rat_off = struct.unpack(f"{fmt}I", val_bytes)[0]
+            num = struct.unpack(f"{fmt}I", data[rat_off:rat_off + 4])[0]
+            den = struct.unpack(f"{fmt}I", data[rat_off + 4:rat_off + 8])[0]
+            tags[tag] = (num, den)
+        elif count > 1 and typ in (3, 4):
+            item_size = 2 if typ == 3 else 4
+            if count * item_size <= 4:
+                arr_data = val_bytes
+            else:
+                arr_off = struct.unpack(f"{fmt}I", val_bytes)[0]
+                arr_data = data[arr_off:arr_off + count * item_size]
+            item_fmt = f"{fmt}H" if typ == 3 else f"{fmt}I"
+            tags[tag] = tuple(
+                struct.unpack(item_fmt, arr_data[j * item_size:(j + 1) * item_size])[0]
+                for j in range(count)
+            )
+        else:
+            tags[tag] = struct.unpack(f"{fmt}I", val_bytes)[0]
+
+    width = tags.get(256, 0)
+    height = tags.get(257, 0)
+    bps_tag = tags.get(258, 8)
+    compression = tags.get(259, 1)
+    spp = tags.get(277, 1)
+    strip_offsets = tags.get(273, 0)
+    strip_byte_counts = tags.get(279, 0)
+
+    if isinstance(bps_tag, tuple):
+        bit_depth = bps_tag[0]
+    else:
+        bit_depth = bps_tag
+
+    if isinstance(width, tuple):
+        width = width[0]
+    if isinstance(height, tuple):
+        height = height[0]
+    if isinstance(spp, tuple):
+        spp = spp[0]
+
+    if compression not in (1, 5):
+        raise ScanError(f"Unsupported TIFF compression: {compression}")
+
+    # Collect strip data
+    if isinstance(strip_offsets, int):
+        strip_offsets = (strip_offsets,)
+    if isinstance(strip_byte_counts, int):
+        strip_byte_counts = (strip_byte_counts,)
+
+    raw = bytearray()
+    for s_off, s_len in zip(strip_offsets, strip_byte_counts):
+        strip = data[s_off:s_off + s_len]
+        if compression == 5:
+            strip = _lzw_decompress(strip)
+        raw.extend(strip)
+
+    # Determine PNG color type
+    if spp >= 3:
+        color_type = 2  # RGB
+        row_bytes = width * 3
+        # Strip extra channels (e.g. RGBX) if needed
+        if spp > 3:
+            stripped = bytearray()
+            src_row = width * spp
+            for y in range(height):
+                for x in range(width):
+                    off = y * src_row + x * spp
+                    stripped.extend(raw[off:off + 3])
+            raw = stripped
+    else:
+        color_type = 0  # Grayscale
+        if bit_depth == 1:
+            row_bytes = (width + 7) // 8
+        else:
+            row_bytes = width
+
+    # Build filtered rows (PNG filter byte 0 = None)
+    filtered = bytearray()
+    for y in range(height):
+        filtered.append(0)
+        filtered.extend(raw[y * row_bytes:(y + 1) * row_bytes])
+
+    png_data = raw_to_png(bytes(filtered), width, height, color_type, bit_depth)
+    return png_data, width, height
+
+
+def _read_scanned_file(path: str) -> ScannedPage:
+    """Read a scanned image file and return a ScannedPage.
+
+    Supports PNG (passed through) and TIFF (converted to PNG).
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        width, height = struct.unpack(">II", data[16:24])
+        return ScannedPage(png_data=data, width=width, height=height)
+
+    if data[:2] in (b"II", b"MM"):
+        png_data, width, height = _tiff_to_png(data)
+        return ScannedPage(png_data=png_data, width=width, height=height)
+
+    raise ScanError(f"Unsupported scan file format (magic: {data[:4].hex()})")
+
+
+# ---------------------------------------------------------------------------
+# Main-thread dispatch helper
+# ---------------------------------------------------------------------------
 
 def _make_invoker_cls() -> type:
     """Create the ObjC helper class for main-thread dispatch."""
@@ -325,12 +471,7 @@ class MacOSBackend:
         self._lock = threading.Lock()
 
     def _ensure_browser(self) -> _BrowserDelegate:
-        """Start the device browser if not already running.
-
-        The browser is kept alive for the lifetime of the backend so that
-        subsequent calls to :meth:`list_scanners` can return instantly when
-        devices have already been discovered.
-        """
+        """Start the device browser if not already running."""
         if self._browser is not None:
             return self._browser_delegate
 
@@ -417,34 +558,46 @@ class MacOSBackend:
         if device is None:
             raise ScanError(f"Scanner {scanner.name!r} not found")
 
-        scan_delegate = _ScanDelegate.alloc().init()
-        device.setDelegate_(scan_delegate)
-        device.requestOpenSession()
-
         run_loop = NSRunLoop.currentRunLoop()
 
-        # Wait for session to open (up to 10s)
-        open_deadline = NSDate.dateWithTimeIntervalSinceNow_(10.0)
-        while not scan_delegate._session_open:
-            if scan_delegate._done:  # error during open
+        # Retry opening the session.  Network scanners may refuse if the
+        # previous session close hasn't fully propagated yet.
+        last_error = None
+        for attempt in range(3):
+            scan_delegate = _ScanDelegate.alloc().init()
+            device.setDelegate_(scan_delegate)
+            device.requestOpenSession()
+
+            open_deadline = NSDate.dateWithTimeIntervalSinceNow_(10.0)
+            while not scan_delegate._session_open:
+                if scan_delegate._done:  # error during open
+                    break
+                if open_deadline.timeIntervalSinceNow() <= 0:
+                    break
+                run_loop.runMode_beforeDate_(
+                    NSDefaultRunLoopMode,
+                    NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                )
+
+            if scan_delegate._session_open:
+                last_error = None
                 break
-            if open_deadline.timeIntervalSinceNow() <= 0:
-                break
+
+            last_error = scan_delegate.error
+            # Spin the run loop briefly before retrying
             run_loop.runMode_beforeDate_(
-                NSDefaultRunLoopMode,
-                NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(2.0)
             )
 
-        if scan_delegate.error:
+        if last_error:
             raise ScanError(
-                f"Failed to open device session: {scan_delegate.error}"
+                f"Failed to open device session: {last_error}"
             )
 
         if not scan_delegate._session_open:
             raise ScanError("Timed out waiting for device session to open")
 
         # Wait for functional unit types to become available (up to 5s).
-        # These are populated asynchronously after the session opens.
         func_deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
         while not device.availableFunctionalUnitTypes():
             if func_deadline.timeIntervalSinceNow() <= 0:
@@ -458,9 +611,6 @@ class MacOSBackend:
         scanner._sources = _read_sources_from_device(device)
 
         # Read maximum scan area per functional unit / source.
-        # Start with the currently selected FU (available immediately),
-        # then switch to other sources and spin the run loop to let the
-        # async selection complete.
         remaining_sources = set(scanner._sources)
         try:
             fu = device.selectedFunctionalUnit()
@@ -474,13 +624,20 @@ class MacOSBackend:
         except Exception:
             pass
 
+        original_fu_type = None
+        try:
+            fu = device.selectedFunctionalUnit()
+            if fu is not None:
+                original_fu_type = fu.type()
+        except Exception:
+            pass
+
         for source in remaining_sources:
             try:
                 icc_type = _SCAN_SOURCE_TO_ICC.get(source)
                 if icc_type is None:
                     continue
                 device.requestSelectFunctionalUnit_(icc_type)
-                # Spin run loop to let the async selection complete
                 deadline = NSDate.dateWithTimeIntervalSinceNow_(1.0)
                 while True:
                     fu = device.selectedFunctionalUnit()
@@ -500,27 +657,68 @@ class MacOSBackend:
             except Exception:
                 pass
 
+        # Restore the original functional unit.
+        if original_fu_type is not None:
+            try:
+                fu = device.selectedFunctionalUnit()
+                if fu is None or fu.type() != original_fu_type:
+                    device.requestSelectFunctionalUnit_(original_fu_type)
+                    deadline = NSDate.dateWithTimeIntervalSinceNow_(1.0)
+                    while True:
+                        fu = device.selectedFunctionalUnit()
+                        if fu is not None and fu.type() == original_fu_type:
+                            break
+                        if deadline.timeIntervalSinceNow() <= 0:
+                            break
+                        run_loop.runMode_beforeDate_(
+                            NSDefaultRunLoopMode,
+                            NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                        )
+            except Exception:
+                pass
+
         scanner._resolutions = _read_resolutions(device)
         scanner._color_modes = [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
         scanner._defaults = _read_defaults(device, scanner._sources)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
         device = self._devices.get(scanner.name)
-        self._delegates.pop(scanner.name, None)
+        scan_delegate = self._delegates.pop(scanner.name, None)
         if device is not None:
             device.requestCloseSession()
+            if scan_delegate is not None:
+                run_loop = NSRunLoop.currentRunLoop()
+                deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
+                while not scan_delegate._session_closed:
+                    if deadline.timeIntervalSinceNow() <= 0:
+                        break
+                    run_loop.runMode_beforeDate_(
+                        NSDefaultRunLoopMode,
+                        NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                    )
 
     def _scan_pages_impl(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
         device = self._devices.get(scanner.name)
         if device is None:
             raise ScanError("Scanner is not open")
 
-        scan_delegate = self._delegates.get(scanner.name)
-        if scan_delegate is None:
+        if scanner.name not in self._delegates:
             raise ScanError("Scanner is not open")
 
+        # Create a fresh delegate for scanning.  The delegate used during
+        # open_scanner goes through FU probing and various async callbacks
+        # that can leave it in a state where requestScan() completes
+        # instantly with no data.
+        scan_delegate = _ScanDelegate.alloc().init()
+        device.setDelegate_(scan_delegate)
+        self._delegates[scanner.name] = scan_delegate
+
+        tmp_dir = tempfile.mkdtemp(prefix="scanlib_")
+        temp_files: list[str] = []
+
         try:
-            device.setTransferMode_(_TRANSFER_MODE_MEMORY_BASED)
+            device.setTransferMode_(_TRANSFER_MODE_FILE_BASED)
+            device.setDownloadsDirectory_(NSURL.fileURLWithPath_(tmp_dir))
 
             # Select scan source if specified
             if options.source is not None:
@@ -537,26 +735,35 @@ class MacOSBackend:
                 pixel_type = _COLOR_MODE_TO_PIXEL_DATA_TYPE.get(options.color_mode)
                 if pixel_type is not None:
                     fu.setPixelDataType_(pixel_type)
+                fu.setBitDepth_(8)
 
                 if options.page_size is not None:
                     factor = _measurement_factor(fu.measurementUnit())
                     if factor is None:
-                        factor = MM_PER_INCH * 10  # fallback: assume inches
+                        factor = MM_PER_INCH * 10
                     w_val = options.page_size.width / factor
                     h_val = options.page_size.height / factor
                     fu.setScanArea_(((0, 0), (w_val, h_val)))
+                else:
+                    phys = fu.physicalSize()
+                    fu.setScanArea_(((0, 0), (phys.width, phys.height)))
 
             check_progress(options.progress, 0)
+
+            # Spin the run loop briefly so the device can process the
+            # configuration changes before we issue the scan request.
+            run_loop = NSRunLoop.currentRunLoop()
+            run_loop.runMode_beforeDate_(
+                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(1.0)
+            )
 
             is_feeder = options.source == ScanSource.FEEDER
             all_pages: list[ScannedPage] = []
 
             while True:
-                # Reset delegate for scan phase
                 scan_delegate._done = False
                 scan_delegate.error = None
-                scan_delegate.completed_pages = []
-                scan_delegate._current_bands = []
+                scan_delegate.scan_urls = []
 
                 device.requestScan()
                 try:
@@ -568,22 +775,20 @@ class MacOSBackend:
                 if scan_delegate.error:
                     err_lower = scan_delegate.error.lower()
                     if "cancel" in err_lower or "abort" in err_lower:
-                        raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
+                        raise ScanAborted(
+                            f"Scan cancelled by device: {scan_delegate.error}"
+                        )
                     raise ScanError(f"Scan failed: {scan_delegate.error}")
 
-                # Flush the last (or only) page
-                if scan_delegate._current_bands:
-                    scan_delegate._finish_page()
-
-                if not scan_delegate.completed_pages:
-                    raise ScanError("Scan completed but no image data was received")
-
-                for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
-                    filtered, width, height, color_type, bit_depth = _assemble_image(
-                        bands, w, h, bpc, nc, pdt
+                if not scan_delegate.scan_urls:
+                    raise ScanError(
+                        "Scan completed but no image data was received"
                     )
-                    png_data = raw_to_png(filtered, width, height, color_type, bit_depth)
-                    all_pages.append(ScannedPage(png_data=png_data, width=width, height=height))
+
+                for file_path in scan_delegate.scan_urls:
+                    temp_files.append(file_path)
+                    page = _read_scanned_file(file_path)
+                    all_pages.append(page)
 
                 if is_feeder:
                     break
@@ -598,3 +803,13 @@ class MacOSBackend:
             raise
         except Exception as exc:
             raise ScanError(f"Scan failed: {exc}") from exc
+        finally:
+            for path in temp_files:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            try:
+                os.rmdir(tmp_dir)
+            except OSError:
+                pass
