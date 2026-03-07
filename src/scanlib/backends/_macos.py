@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import math
 import struct
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
 import ImageCaptureCore
@@ -10,15 +10,15 @@ import objc
 from Foundation import NSDate, NSDefaultRunLoopMode, NSRunLoop, NSURL
 
 from .._types import (
-    ColorMode,
-    NoScannerFoundError,
+    PageSize,
     ScanAborted,
     ScanError,
-    ScannerInfo,
+    ScannedPage,
+    Scanner,
     ScanOptions,
     ScanSource,
-    ScannedDocument,
 )
+from ._util import MM_PER_INCH, check_progress
 
 _ICC_SOURCE_MAP = {
     ImageCaptureCore.ICScannerFunctionalUnitTypeFlatbed: ScanSource.FLATBED,
@@ -26,8 +26,6 @@ _ICC_SOURCE_MAP = {
 }
 
 _SCAN_SOURCE_TO_ICC = {v: k for k, v in _ICC_SOURCE_MAP.items()}
-
-_MM_PER_INCH = 25.4
 
 
 def _read_png_dimensions(data: bytes) -> tuple[int, int]:
@@ -38,12 +36,20 @@ def _read_png_dimensions(data: bytes) -> tuple[int, int]:
     return width, height
 
 
-def _check_progress(
-    progress: Callable[[int], bool] | None, percent: int
-) -> None:
-    """Call the progress callback; raise ScanAborted if it returns False."""
-    if progress is not None and progress(percent) is False:
-        raise ScanAborted("Scan aborted")
+def _measurement_factor(unit: int) -> float | None:
+    """Return factor to convert from measurement unit to 1/10 mm, or None if unknown.
+
+    ICScannerMeasurementUnit: 0=inches, 1=centimeters, 2=picas, 3=points.
+    """
+    if unit == 0:  # inches
+        return MM_PER_INCH * 10
+    elif unit == 1:  # centimeters
+        return 100.0
+    elif unit == 2:  # picas (1/6 inch)
+        return MM_PER_INCH * 10 / 6.0
+    elif unit == 3:  # points (1/72 inch)
+        return MM_PER_INCH * 10 / 72.0
+    return None
 
 
 class _BrowserDelegate(ImageCaptureCore.NSObject):
@@ -55,6 +61,7 @@ class _BrowserDelegate(ImageCaptureCore.NSObject):
             return None
         self.scanners = []
         self._done = False
+        self._removed = []
         return self
 
     def deviceBrowser_didAddDevice_moreComing_(self, browser, device, moreComing):
@@ -64,54 +71,31 @@ class _BrowserDelegate(ImageCaptureCore.NSObject):
             self._done = True
 
     def deviceBrowser_didRemoveDevice_moreGoing_(self, browser, device, moreGoing):
-        pass
-
-
-class _SessionDelegate(ImageCaptureCore.NSObject):
-    """Minimal delegate for opening a device session."""
-
-    def init(self):
-        self = objc.super(_SessionDelegate, self).init()
-        if self is None:
-            return None
-        self._done = False
-        self.error = None
-        return self
-
-    def device_didOpenSessionWithError_(self, device, error):
-        if error:
-            self.error = str(error)
-        self._done = True
-
-    def device_didCloseSessionWithError_(self, device, error):
-        pass
-
-    def didRemoveDevice_(self, device):
-        pass
+        self._removed.append(device)
 
 
 class _ScanDelegate(ImageCaptureCore.NSObject):
-    """Delegate for ICScannerDevice to handle scan lifecycle."""
+    """Delegate for ICScannerDevice to handle the full scan lifecycle."""
 
     def init(self):
         self = objc.super(_ScanDelegate, self).init()
         if self is None:
             return None
-        self.scanned_url = None
+        self.scanned_urls = []
         self.error = None
         self._done = False
+        self._session_open = False
         return self
-
-    def deviceDidBecomeReadyWithCompleteSettings_(self, device):
-        pass
 
     def device_didOpenSessionWithError_(self, device, error):
         if error:
             self.error = str(error)
             self._done = True
+        else:
+            self._session_open = True
 
     def scannerDevice_didScanToURL_(self, device, url):
-        self.scanned_url = url
+        self.scanned_urls.append(url)
 
     def scannerDevice_didCompleteScanWithError_(self, device, error):
         if error:
@@ -128,128 +112,209 @@ class _ScanDelegate(ImageCaptureCore.NSObject):
 def _run_until(
     done_flag,
     timeout: float,
-    progress: Callable[[int], bool] | None = None,
+    progress=None,
 ) -> None:
-    """Spin the current NSRunLoop until *done_flag._done* is True or *timeout* elapses.
-
-    Raises :class:`ScanAborted` if *progress* returns ``False``.
-    """
+    """Spin the current NSRunLoop until *done_flag._done* is True or *timeout* elapses."""
     run_loop = NSRunLoop.currentRunLoop()
     deadline = NSDate.dateWithTimeIntervalSinceNow_(timeout)
     while not done_flag._done:
-        _check_progress(progress, -1)
+        check_progress(progress, -1)
         if NSDate.date().compare_(deadline) != -1:  # NSOrderedAscending = -1
             break
         run_loop.runMode_beforeDate_(
-            NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.5)
+            NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.1)
         )
 
 
-def _discover_devices() -> tuple[list, object]:
-    """Discover scanner devices. Returns (devices, browser)."""
-    delegate = _BrowserDelegate.alloc().init()
-    browser = ImageCaptureCore.ICDeviceBrowser.alloc().init()
-    browser.setDelegate_(delegate)
-    browser.setBrowsedDeviceTypeMask_(
-        ImageCaptureCore.ICDeviceTypeMaskScanner
-        | ImageCaptureCore.ICDeviceLocationTypeMaskLocal
-        | ImageCaptureCore.ICDeviceLocationTypeMaskRemote
+def _page_size_from_fu(fu: object) -> PageSize | None:
+    """Read physical size from a functional unit, converting to 1/10 mm."""
+    physical_size = fu.physicalSize()
+    factor = _measurement_factor(fu.measurementUnit())
+    if factor is None:
+        return None
+    return PageSize(
+        width=math.ceil(physical_size.width * factor),
+        height=math.ceil(physical_size.height * factor),
     )
-    browser.start()
-    _run_until(delegate, timeout=5.0)
-    return delegate.scanners, browser
 
 
-def _open_device_session(device: object) -> None:
-    """Open a session on *device* and wait for it to complete."""
-    delegate = _SessionDelegate.alloc().init()
-    device.setDelegate_(delegate)
-    device.requestOpenSession()
-    _run_until(delegate, timeout=10.0)
-
-
-def _get_device_sources(device: object) -> list[ScanSource]:
-    """Get available scan sources from an ICC scanner device.
-
-    Opens a session on the device if needed and waits for capability data.
-    """
-    opened_here = False
-    try:
-        if not device.hasOpenSession():
-            _open_device_session(device)
-            opened_here = True
-
-        # The device may need time to populate capabilities after session opens.
-        run_loop = NSRunLoop.currentRunLoop()
-        deadline = NSDate.dateWithTimeIntervalSinceNow_(10.0)
-        unit_types = device.availableFunctionalUnitTypes()
-        while not unit_types:
-            if deadline.timeIntervalSinceNow() <= 0:
-                break
-            run_loop.runMode_beforeDate_(
-                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.5)
-            )
-            unit_types = device.availableFunctionalUnitTypes()
-
-        sources = []
-        if unit_types:
-            for unit_type in unit_types:
-                mapped = _ICC_SOURCE_MAP.get(unit_type)
-                if mapped is not None:
-                    sources.append(mapped)
-        return sources
-    except Exception:
-        return []
-    finally:
-        if opened_here:
-            device.requestCloseSession()
+def _read_sources_from_device(device: object) -> list[ScanSource]:
+    """Read sources from a device that already has an open session."""
+    unit_types = device.availableFunctionalUnitTypes()
+    sources = []
+    if unit_types:
+        for unit_type in unit_types:
+            mapped = _ICC_SOURCE_MAP.get(unit_type)
+            if mapped is not None:
+                sources.append(mapped)
+    return sources
 
 
 class MacOSBackend:
     """macOS scanning backend using ImageCaptureCore."""
 
-    def list_scanners(self) -> list[ScannerInfo]:
-        devices, browser = _discover_devices()
-        try:
-            return [
-                ScannerInfo(
-                    name=dev.name(),
-                    vendor=None,
-                    model=dev.name(),
-                    backend="imagecapture",
-                    sources=_get_device_sources(dev),
-                )
-                for dev in devices
-            ]
-        finally:
-            browser.stop()
+    def __init__(self) -> None:
+        self._devices: dict[str, object] = {}
+        self._delegates: dict[str, object] = {}
+        self._browser = None
+        self._browser_delegate = None
 
-    def scan(
-        self, scanner: ScannerInfo | None, options: ScanOptions
-    ) -> ScannedDocument:
-        if scanner is None:
-            scanners = self.list_scanners()
-            if not scanners:
-                raise NoScannerFoundError("No scanners found")
-            scanner = scanners[0]
+    def _ensure_browser(self) -> _BrowserDelegate:
+        """Start the device browser if not already running.
 
-        devices, browser = _discover_devices()
+        The browser is kept alive for the lifetime of the backend so that
+        subsequent calls to :meth:`list_scanners` can return instantly when
+        devices have already been discovered.
+        """
+        if self._browser is not None:
+            return self._browser_delegate
 
-        device = None
-        for dev in devices:
-            if dev.name() == scanner.name:
-                device = dev
-                break
+        delegate = _BrowserDelegate.alloc().init()
+        browser = ImageCaptureCore.ICDeviceBrowser.alloc().init()
+        browser.setDelegate_(delegate)
+        browser.setBrowsedDeviceTypeMask_(
+            ImageCaptureCore.ICDeviceTypeMaskScanner
+            | ImageCaptureCore.ICDeviceLocationTypeMaskLocal
+            | ImageCaptureCore.ICDeviceLocationTypeMaskRemote
+        )
+        browser.start()
 
+        self._browser = browser
+        self._browser_delegate = delegate
+        return delegate
+
+    def list_scanners(self) -> list[Scanner]:
+        delegate = self._ensure_browser()
+
+        if not delegate._done:
+            _run_until(delegate, timeout=5.0)
+
+        # Purge removed devices
+        for removed_dev in delegate._removed:
+            self._devices.pop(removed_dev.name(), None)
+        delegate._removed.clear()
+
+        # Build scanner list from current devices
+        for dev in delegate.scanners:
+            if dev.name() not in self._devices:
+                self._devices[dev.name()] = dev
+
+        return [
+            Scanner(
+                name=dev.name(),
+                vendor=None,
+                model=dev.name(),
+                backend="imagecapture",
+                _backend_impl=self,
+            )
+            for dev in delegate.scanners
+        ]
+
+    def open_scanner(self, scanner: Scanner) -> None:
+        device = self._devices.get(scanner.name)
         if device is None:
-            browser.stop()
-            raise NoScannerFoundError(f"Scanner {scanner.name!r} not found")
+            raise ScanError(f"Scanner {scanner.name!r} not found")
+
+        scan_delegate = _ScanDelegate.alloc().init()
+        device.setDelegate_(scan_delegate)
+        device.requestOpenSession()
+
+        run_loop = NSRunLoop.currentRunLoop()
+
+        # Wait for session to open (up to 10s)
+        open_deadline = NSDate.dateWithTimeIntervalSinceNow_(10.0)
+        while not scan_delegate._session_open:
+            if scan_delegate._done:  # error during open
+                break
+            if open_deadline.timeIntervalSinceNow() <= 0:
+                break
+            run_loop.runMode_beforeDate_(
+                NSDefaultRunLoopMode,
+                NSDate.dateWithTimeIntervalSinceNow_(0.1),
+            )
+
+        if scan_delegate.error:
+            raise ScanError(
+                f"Failed to open device session: {scan_delegate.error}"
+            )
+
+        if not scan_delegate._session_open:
+            raise ScanError("Timed out waiting for device session to open")
+
+        # Wait for functional unit types to become available (up to 5s).
+        # These are populated asynchronously after the session opens.
+        func_deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
+        while not device.availableFunctionalUnitTypes():
+            if func_deadline.timeIntervalSinceNow() <= 0:
+                break
+            run_loop.runMode_beforeDate_(
+                NSDefaultRunLoopMode,
+                NSDate.dateWithTimeIntervalSinceNow_(0.1),
+            )
+
+        self._delegates[scanner.name] = scan_delegate
+        scanner._sources = _read_sources_from_device(device)
+
+        # Read maximum scan area per functional unit / source.
+        # Start with the currently selected FU (available immediately),
+        # then switch to other sources and spin the run loop to let the
+        # async selection complete.
+        remaining_sources = set(scanner._sources)
+        try:
+            fu = device.selectedFunctionalUnit()
+            if fu is not None:
+                ps = _page_size_from_fu(fu)
+                if ps is not None:
+                    fu_source = _ICC_SOURCE_MAP.get(fu.type())
+                    if fu_source is not None and fu_source in remaining_sources:
+                        scanner._max_page_sizes[fu_source] = ps
+                        remaining_sources.discard(fu_source)
+        except Exception:
+            pass
+
+        for source in remaining_sources:
+            try:
+                icc_type = _SCAN_SOURCE_TO_ICC.get(source)
+                if icc_type is None:
+                    continue
+                device.requestSelectFunctionalUnit_(icc_type)
+                # Spin run loop to let the async selection complete
+                deadline = NSDate.dateWithTimeIntervalSinceNow_(1.0)
+                while True:
+                    fu = device.selectedFunctionalUnit()
+                    if fu is not None and fu.type() == icc_type:
+                        break
+                    if deadline.timeIntervalSinceNow() <= 0:
+                        break
+                    run_loop.runMode_beforeDate_(
+                        NSDefaultRunLoopMode,
+                        NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                    )
+                fu = device.selectedFunctionalUnit()
+                if fu is not None and fu.type() == icc_type:
+                    ps = _page_size_from_fu(fu)
+                    if ps is not None:
+                        scanner._max_page_sizes[source] = ps
+            except Exception:
+                pass
+
+    def close_scanner(self, scanner: Scanner) -> None:
+        device = self._devices.get(scanner.name)
+        self._delegates.pop(scanner.name, None)
+        if device is not None:
+            device.requestCloseSession()
+
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+        device = self._devices.get(scanner.name)
+        if device is None:
+            raise ScanError("Scanner is not open")
+
+        scan_delegate = self._delegates.get(scanner.name)
+        if scan_delegate is None:
+            raise ScanError("Scanner is not open")
 
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
-                scan_delegate = _ScanDelegate.alloc().init()
-                device.setDelegate_(scan_delegate)
-
                 downloads_url = NSURL.fileURLWithPath_(tmp_dir)
                 device.setDownloadsDirectory_(downloads_url)
                 device.setDocumentName_("scanlib_scan")
@@ -263,24 +328,30 @@ class MacOSBackend:
                         if unit_types and icc_type in unit_types:
                             device.requestSelectFunctionalUnit_(icc_type)
 
-                device.requestOpenSession()
-
                 # Configure page size on the selected functional unit
                 if options.page_size is not None:
                     fu = device.selectedFunctionalUnit()
                     if fu is not None:
-                        width_pts = options.page_size.width / 10.0 / _MM_PER_INCH * 72
-                        height_pts = options.page_size.height / 10.0 / _MM_PER_INCH * 72
-                        fu.setScanArea_(((0, 0), (width_pts, height_pts)))
+                        factor = _measurement_factor(fu.measurementUnit())
+                        if factor is None:
+                            factor = MM_PER_INCH * 10  # fallback: assume inches
+                        # Convert from 1/10 mm to the functional unit's measurement unit
+                        w_val = options.page_size.width / factor
+                        h_val = options.page_size.height / factor
+                        fu.setScanArea_(((0, 0), (w_val, h_val)))
 
-                _check_progress(options.progress, 0)
+                check_progress(options.progress, 0)
+
+                # Reset delegate for scan phase
+                scan_delegate._done = False
+                scan_delegate.error = None
+                scan_delegate.scanned_urls = []
 
                 device.requestScan()
                 try:
                     _run_until(scan_delegate, timeout=120.0, progress=options.progress)
                 except ScanAborted:
                     device.cancelScan()
-                    device.requestCloseSession()
                     raise
 
                 if scan_delegate.error:
@@ -289,27 +360,20 @@ class MacOSBackend:
                         raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
                     raise ScanError(f"Scan failed: {scan_delegate.error}")
 
-                if scan_delegate.scanned_url is None:
-                    raise ScanError("Scan completed but no output file was produced")
+                if not scan_delegate.scanned_urls:
+                    raise ScanError("Scan completed but no output files were produced")
 
-                file_path = scan_delegate.scanned_url.path()
-                png_data = Path(file_path).read_bytes()
+                pages: list[ScannedPage] = []
+                for url in scan_delegate.scanned_urls:
+                    png_data = Path(url.path()).read_bytes()
+                    width, height = _read_png_dimensions(png_data)
+                    pages.append(ScannedPage(
+                        png_data=png_data, width=width, height=height
+                    ))
 
-            width, height = _read_png_dimensions(png_data)
-
-            _check_progress(options.progress, 100)
-
-            return ScannedDocument(
-                data=png_data,
-                width=width,
-                height=height,
-                dpi=options.dpi,
-                color_mode=options.color_mode,
-                scanner=scanner,
-            )
-        except (NoScannerFoundError, ScanError, ScanAborted):
+            check_progress(options.progress, 100)
+            return pages
+        except (ScanError, ScanAborted):
             raise
         except Exception as exc:
             raise ScanError(f"Scan failed: {exc}") from exc
-        finally:
-            browser.stop()

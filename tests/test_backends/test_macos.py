@@ -5,7 +5,7 @@ import zlib
 import pytest
 
 import ImageCaptureCore
-from scanlib._types import ScanSource
+from scanlib._types import ScanError, ScanSource
 
 
 class TestReadPngDimensions:
@@ -27,42 +27,41 @@ class TestReadPngDimensions:
 
     def test_invalid_png_raises(self):
         from scanlib.backends._macos import _read_png_dimensions
-        from scanlib._types import ScanError
 
         with pytest.raises(ScanError, match="Invalid PNG"):
             _read_png_dimensions(b"not a png")
 
 
-class TestGetDeviceSources:
+class TestReadSourcesFromDevice:
     def test_flatbed_and_feeder(self):
-        from scanlib.backends._macos import _get_device_sources
+        from scanlib.backends._macos import _read_sources_from_device
 
         device = mock.MagicMock()
         device.availableFunctionalUnitTypes.return_value = [
             ImageCaptureCore.ICScannerFunctionalUnitTypeFlatbed,
             ImageCaptureCore.ICScannerFunctionalUnitTypeDocumentFeeder,
         ]
-        sources = _get_device_sources(device)
+        sources = _read_sources_from_device(device)
 
         assert ScanSource.FLATBED in sources
         assert ScanSource.FEEDER in sources
 
     def test_flatbed_only(self):
-        from scanlib.backends._macos import _get_device_sources
+        from scanlib.backends._macos import _read_sources_from_device
 
         device = mock.MagicMock()
         device.availableFunctionalUnitTypes.return_value = [
             ImageCaptureCore.ICScannerFunctionalUnitTypeFlatbed,
         ]
-        sources = _get_device_sources(device)
+        sources = _read_sources_from_device(device)
 
         assert sources == [ScanSource.FLATBED]
 
     def test_no_units(self):
-        from scanlib.backends._macos import _get_device_sources
+        from scanlib.backends._macos import _read_sources_from_device
 
         device = mock.MagicMock()
         device.availableFunctionalUnitTypes.return_value = None
-        sources = _get_device_sources(device)
+        sources = _read_sources_from_device(device)
 
         assert sources == []

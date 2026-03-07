@@ -1,9 +1,12 @@
+import pytest
+
 from scanlib._types import (
     ColorMode,
     PageSize,
     ScanAborted,
     ScanLibError,
-    ScannerInfo,
+    Scanner,
+    ScannerNotOpenError,
     ScanOptions,
     ScanSource,
     ScannedDocument,
@@ -30,29 +33,60 @@ class TestPageSize:
         assert ps.height == 2970
 
 
-class TestScannerInfo:
+class TestScanner:
     def test_creation(self):
-        info = ScannerInfo(name="test", vendor="Acme", model="X100", backend="sane")
-        assert info.name == "test"
-        assert info.vendor == "Acme"
-        assert info.model == "X100"
-        assert info.backend == "sane"
-        assert info.sources == []
+        s = Scanner(name="test", vendor="Acme", model="X100", backend="sane")
+        assert s.name == "test"
+        assert s.vendor == "Acme"
+        assert s.model == "X100"
+        assert s.backend == "sane"
+        assert s.is_open is False
 
     def test_optional_fields(self):
-        info = ScannerInfo(name="test", vendor=None, model=None, backend="twain")
-        assert info.vendor is None
-        assert info.model is None
+        s = Scanner(name="test", vendor=None, model=None, backend="twain")
+        assert s.vendor is None
+        assert s.model is None
 
-    def test_sources(self):
-        info = ScannerInfo(
-            name="test",
-            vendor=None,
-            model=None,
-            backend="sane",
-            sources=[ScanSource.FLATBED, ScanSource.FEEDER],
-        )
-        assert info.sources == [ScanSource.FLATBED, ScanSource.FEEDER]
+    def test_sources_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            _ = s.sources
+
+    def test_scan_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            s.scan()
+
+    def test_max_page_sizes_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            _ = s.max_page_sizes
+
+    def test_max_page_sizes_default_empty(self):
+        mock_backend = type("B", (), {
+            "open_scanner": lambda self, s: None,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.max_page_sizes == {}
+
+    def test_context_manager(self):
+        mock_backend = type("B", (), {
+            "open_scanner": lambda self, s: None,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s as opened:
+            assert opened is s
+            assert s.is_open is True
+        assert s.is_open is False
+
+    def test_repr(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        assert "closed" in repr(s)
 
 
 class TestScanOptions:
@@ -79,16 +113,18 @@ class TestScanOptions:
 
 class TestScannedDocument:
     def test_creation(self):
-        scanner = ScannerInfo(name="s", vendor=None, model=None, backend="sane")
+        scanner = Scanner(name="s", vendor=None, model=None, backend="sane")
         doc = ScannedDocument(
-            data=b"\x89PNG",
+            data=b"%PDF-1.4",
+            page_count=1,
             width=100,
             height=200,
             dpi=300,
             color_mode=ColorMode.COLOR,
             scanner=scanner,
         )
-        assert doc.data == b"\x89PNG"
+        assert doc.data == b"%PDF-1.4"
+        assert doc.page_count == 1
         assert doc.width == 100
         assert doc.height == 200
         assert doc.dpi == 300
@@ -99,3 +135,8 @@ class TestScannedDocument:
 class TestScanAborted:
     def test_is_scanlib_error(self):
         assert issubclass(ScanAborted, ScanLibError)
+
+
+class TestScannerNotOpenError:
+    def test_is_scanlib_error(self):
+        assert issubclass(ScannerNotOpenError, ScanLibError)

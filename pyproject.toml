@@ -18,5 +18,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout"]
 
+[tool.pytest.ini_options]
+markers = ["hardware: tests requiring a physical scanner"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

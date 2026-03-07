@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
+import math
 import struct
 import zlib
 
@@ -9,22 +10,21 @@ import twain
 
 from .._types import (
     ColorMode,
-    NoScannerFoundError,
+    PageSize,
     ScanAborted,
     ScanError,
-    ScannerInfo,
+    ScannedPage,
+    Scanner,
     ScanOptions,
     ScanSource,
-    ScannedDocument,
 )
+from ._util import MM_PER_INCH, check_progress
 
 _COLOR_MODE_MAP = {
     ColorMode.COLOR: "color",
     ColorMode.GRAY: "gray",
     ColorMode.BW: "bw",
 }
-
-_MM_PER_INCH = 25.4
 
 
 def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
@@ -50,47 +50,85 @@ def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
     if bits_per_pixel == 24:
         color_type = 2  # RGB
         channels = 3
+        png_bit_depth = 8
     elif bits_per_pixel == 32:
         color_type = 6  # RGBA
         channels = 4
+        png_bit_depth = 8
     elif bits_per_pixel == 8:
         color_type = 0  # Grayscale
         channels = 1
+        png_bit_depth = 8
+    elif bits_per_pixel == 1:
+        color_type = 0  # Grayscale 1-bit
+        channels = 0  # special handling below
+        png_bit_depth = 1
     else:
         raise ScanError(f"Unsupported BMP bit depth: {bits_per_pixel}")
-
-    bmp_row_size = (width * channels + 3) & ~3
-    pixel_data = bmp_data[data_offset:]
-
-    raw_rows = []
-    for y in range(height):
-        if bottom_up:
-            src_y = height - 1 - y
-        else:
-            src_y = y
-        row_start = src_y * bmp_row_size
-        row = pixel_data[row_start : row_start + width * channels]
-
-        if channels >= 3:
-            row_array = bytearray(row)
-            for x in range(width):
-                i = x * channels
-                row_array[i], row_array[i + 2] = row_array[i + 2], row_array[i]
-            row = bytes(row_array)
-
-        raw_rows.append(b"\x00" + row)
-
-    raw_data = b"".join(raw_rows)
 
     def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
         chunk = chunk_type + data
         crc = struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
         return struct.pack(">I", len(data)) + chunk + crc
 
+    if bits_per_pixel == 1:
+        # 1-bit BMP: rows are bit-packed, padded to 4 bytes
+        # BMP palette entry 0 is usually white, entry 1 black (or vice versa)
+        # Read palette to determine mapping
+        palette_offset = 14 + header_size
+        pal_0 = bmp_data[palette_offset]      # blue component of entry 0
+        pal_1 = bmp_data[palette_offset + 4]  # blue component of entry 1
+        # If palette entry 0 is brighter, BMP bit 0=white, 1=black → invert for PNG
+        # In PNG grayscale 1-bit: 0=black, 1=white
+        invert = pal_0 > pal_1
+
+        bmp_row_size = ((width + 31) // 32) * 4  # BMP rows padded to 4 bytes
+        png_row_bytes = (width + 7) // 8
+        pixel_data = bmp_data[data_offset:]
+
+        raw_rows = []
+        for y in range(height):
+            src_y = (height - 1 - y) if bottom_up else y
+            row_start = src_y * bmp_row_size
+            row = bytearray(pixel_data[row_start : row_start + png_row_bytes])
+            if invert:
+                for i in range(len(row)):
+                    row[i] ^= 0xFF
+            # Mask unused trailing bits in last byte
+            remainder = width % 8
+            if remainder:
+                row[-1] &= (0xFF << (8 - remainder)) & 0xFF
+            raw_rows.append(b"\x00" + bytes(row))
+
+        raw_data = b"".join(raw_rows)
+    else:
+        bmp_row_size = (width * channels + 3) & ~3
+        pixel_data = bmp_data[data_offset:]
+
+        raw_rows = []
+        for y in range(height):
+            if bottom_up:
+                src_y = height - 1 - y
+            else:
+                src_y = y
+            row_start = src_y * bmp_row_size
+            row = pixel_data[row_start : row_start + width * channels]
+
+            if channels >= 3:
+                row_array = bytearray(row)
+                for x in range(width):
+                    i = x * channels
+                    row_array[i], row_array[i + 2] = row_array[i + 2], row_array[i]
+                row = bytes(row_array)
+
+            raw_rows.append(b"\x00" + row)
+
+        raw_data = b"".join(raw_rows)
+
     png = b"\x89PNG\r\n\x1a\n"
     png += _png_chunk(
         b"IHDR",
-        struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0),
+        struct.pack(">IIBBBBB", width, height, png_bit_depth, color_type, 0, 0, 0),
     )
     png += _png_chunk(b"IDAT", zlib.compress(raw_data))
     png += _png_chunk(b"IEND", b"")
@@ -131,97 +169,125 @@ def _create_hidden_window() -> int:
 class TwainBackend:
     """Windows scanning backend using pytwain (TWAIN)."""
 
+    def __init__(self) -> None:
+        self._handles: dict[str, object] = {}
+
     def _get_source_manager(self) -> twain.SourceManager:
         hwnd = _create_hidden_window()
         return twain.SourceManager(hwnd)
 
-    def _query_sources(self, source_name: str) -> list[ScanSource]:
-        """Query available scan sources for a TWAIN source."""
+    def list_scanners(self) -> list[Scanner]:
+        with self._get_source_manager() as sm:
+            return [
+                Scanner(
+                    name=name,
+                    vendor=None,
+                    model=None,
+                    backend="twain",
+                    _backend_impl=self,
+                )
+                for name in sm.source_list
+            ]
+
+    def open_scanner(self, scanner: Scanner) -> None:
+        try:
+            sm = self._get_source_manager()
+            sm.__enter__()
+            src = sm.open_source(scanner.name)
+        except Exception as exc:
+            raise ScanError(
+                f"Failed to open scanner {scanner.name!r}: {exc}"
+            ) from exc
+
+        self._handles[scanner.name] = (sm, src)
+
+        # Query sources
         sources = [ScanSource.FLATBED]
         try:
-            with self._get_source_manager() as sm:
-                src = sm.open_source(source_name)
-                try:
-                    if src.get_capability(twain.CAP_FEEDERENABLED) is not None:
-                        sources.append(ScanSource.FEEDER)
-                except Exception:
-                    pass
-                finally:
-                    src.close()
+            if src.get_capability(twain.CAP_FEEDERENABLED) is not None:
+                sources.append(ScanSource.FEEDER)
         except Exception:
             pass
-        return sources
+        scanner._sources = sources
 
-    def list_scanners(self) -> list[ScannerInfo]:
-        with self._get_source_manager() as sm:
-            scanners = []
-            for name in sm.source_list:
-                scanners.append(
-                    ScannerInfo(
-                        name=name,
-                        vendor=None,
-                        model=None,
-                        backend="twain",
-                        sources=self._query_sources(name),
-                    )
+        # Query maximum scan area per source
+        try:
+            phys_w = src.get_capability(twain.ICAP_PHYSICALWIDTH)
+            phys_h = src.get_capability(twain.ICAP_PHYSICALHEIGHT)
+            if phys_w is not None and phys_h is not None:
+                ps = PageSize(
+                    width=math.ceil(float(phys_w) * MM_PER_INCH * 10),
+                    height=math.ceil(float(phys_h) * MM_PER_INCH * 10),
                 )
-            return scanners
+                for source in sources:
+                    scanner._max_page_sizes[source] = ps
+        except Exception:
+            pass
 
-    def scan(
-        self, scanner: ScannerInfo | None, options: ScanOptions
-    ) -> ScannedDocument:
-        if scanner is None:
-            scanners = self.list_scanners()
-            if not scanners:
-                raise NoScannerFoundError("No scanners found")
-            scanner = scanners[0]
+    def close_scanner(self, scanner: Scanner) -> None:
+        handle = self._handles.pop(scanner.name, None)
+        if handle is not None:
+            sm, src = handle
+            try:
+                src.close()
+            except Exception:
+                pass
+            try:
+                sm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+        handle = self._handles.get(scanner.name)
+        if handle is None:
+            raise ScanError("Scanner is not open")
+
+        _, src = handle
 
         try:
-            with self._get_source_manager() as sm:
-                src = sm.open_source(scanner.name)
+            if options.source == ScanSource.FEEDER:
+                src.set_capability(twain.CAP_FEEDERENABLED, twain.TWTY_BOOL, True)
+            elif options.source == ScanSource.FLATBED:
+                src.set_capability(twain.CAP_FEEDERENABLED, twain.TWTY_BOOL, False)
+
+            if options.page_size is not None:
+                width_in = options.page_size.width / 10.0 / MM_PER_INCH
+                height_in = options.page_size.height / 10.0 / MM_PER_INCH
+                src.set_image_layout((0, 0, width_in, height_in))
+
+            check_progress(options.progress, 0)
+
+            try:
+                src.request_acquire(show_ui=False, modal_ui=False)
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "cancel" in msg or "abort" in msg:
+                    raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
+                raise
+
+            is_feeder = options.source == ScanSource.FEEDER
+            pages: list[ScannedPage] = []
+
+            while True:
                 try:
-                    if options.source == ScanSource.FEEDER:
-                        src.set_capability(twain.CAP_FEEDERENABLED, twain.TWTY_BOOL, True)
-                    elif options.source == ScanSource.FLATBED:
-                        src.set_capability(twain.CAP_FEEDERENABLED, twain.TWTY_BOOL, False)
+                    native_handle, more_pending = src.xfer_image_natively()
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if "cancel" in msg or "abort" in msg:
+                        raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
+                    raise
 
-                    if options.page_size is not None:
-                        width_in = options.page_size.width / 10.0 / _MM_PER_INCH
-                        height_in = options.page_size.height / 10.0 / _MM_PER_INCH
-                        src.set_image_layout((0, 0, width_in, height_in))
+                bmp_data = twain.dib_to_bm_file(native_handle)
+                png_data, width, height = _bmp_to_png(bmp_data)
+                pages.append(ScannedPage(png_data=png_data, width=width, height=height))
 
-                    if options.progress is not None and options.progress(0) is False:
-                        raise ScanAborted("Scan aborted")
+                if not is_feeder or not more_pending:
+                    break
 
-                    try:
-                        src.request_acquire(show_ui=False, modal_ui=False)
-                        handle, _ = src.xfer_image_natively()
-                    except ScanAborted:
-                        raise
-                    except Exception as exc:
-                        msg = str(exc).lower()
-                        if "cancel" in msg or "abort" in msg:
-                            raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
-                        raise
+            check_progress(options.progress, 100)
 
-                    if options.progress is not None and options.progress(100) is False:
-                        raise ScanAborted("Scan aborted")
-
-                    bmp_data = twain.dib_to_bm_file(handle)
-                finally:
-                    src.close()
-
-            png_data, width, height = _bmp_to_png(bmp_data)
-
-            return ScannedDocument(
-                data=png_data,
-                width=width,
-                height=height,
-                dpi=options.dpi,
-                color_mode=options.color_mode,
-                scanner=scanner,
-            )
-        except (NoScannerFoundError, ScanError, ScanAborted):
+            return pages
+        except (ScanAborted, ScanError):
             raise
         except Exception as exc:
             raise ScanError(f"Scan failed: {exc}") from exc

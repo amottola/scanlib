@@ -3,27 +3,37 @@ from unittest import mock
 import pytest
 
 import scanlib
-from scanlib._types import BackendNotAvailableError, ScannerInfo, ScanSource
+from scanlib._types import BackendNotAvailableError, Scanner
 
 
 class TestGetBackend:
     def test_unsupported_platform(self):
+        # Reset cached backend
+        scanlib._backend = None
         with mock.patch("scanlib.sys") as mock_sys:
             mock_sys.platform = "freebsd"
 
             with pytest.raises(BackendNotAvailableError, match="Unsupported platform"):
                 scanlib._get_backend()
+        # Reset again so other tests aren't affected
+        scanlib._backend = None
+
+    def test_caches_backend(self):
+        scanlib._backend = None
+        b1 = scanlib._get_backend()
+        b2 = scanlib._get_backend()
+        assert b1 is b2
+        scanlib._backend = None
 
 
 class TestListScanners:
     def test_returns_scanners_from_backend(self):
         fake_scanners = [
-            ScannerInfo(
+            Scanner(
                 name="Test Scanner",
                 vendor="Acme",
                 model="X100",
                 backend="mock",
-                sources=[ScanSource.FLATBED, ScanSource.FEEDER],
             ),
         ]
         mock_backend = mock.MagicMock()
@@ -47,13 +57,12 @@ class TestListScanners:
     @pytest.mark.timeout(15)
     def test_with_real_backend(self):
         """Call list_scanners with the real platform backend, no mocking."""
+        scanlib._backend = None
         result = scanlib.list_scanners()
 
         assert isinstance(result, list)
         for scanner in result:
-            assert isinstance(scanner, ScannerInfo)
+            assert isinstance(scanner, Scanner)
             assert isinstance(scanner.name, str)
             assert isinstance(scanner.backend, str)
-            assert isinstance(scanner.sources, list)
-            for source in scanner.sources:
-                assert isinstance(source, ScanSource)
+        scanlib._backend = None
