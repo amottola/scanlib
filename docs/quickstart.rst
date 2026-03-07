@@ -8,11 +8,38 @@ Installation
 
    pip install scanlib
 
-Platform dependencies are installed automatically:
+Platform Dependencies
+~~~~~~~~~~~~~~~~~~~~~
 
-- **Linux**: requires ``libsane`` (install via ``apt install libsane`` or equivalent)
-- **macOS**: uses the built-in ImageCaptureCore framework (no extra install)
-- **Windows**: installs ``pytwain`` automatically
+scanlib uses conditional dependencies that are installed automatically by pip
+on each platform:
+
+- **Linux**: Uses SANE via ctypes. No Python dependency is needed, but
+  ``libsane`` must be installed at the system level:
+
+  .. code-block:: bash
+
+     # Debian / Ubuntu
+     sudo apt install libsane-dev
+
+     # Fedora / RHEL
+     sudo dnf install sane-backends
+
+     # Arch
+     sudo pacman -S sane
+
+- **macOS**: Uses ImageCaptureCore via pyobjc. The Python binding
+  (``pyobjc-framework-ImageCaptureCore``) is installed automatically by pip.
+  No system-level install is needed — the scanning framework is built into
+  macOS.
+
+- **Windows**: Uses TWAIN via pytwain. The Python binding (``pytwain``) is
+  installed automatically by pip. No system-level install is needed — the
+  TWAIN interface is built into Windows.
+
+scanlib was designed with minimal dependencies as a core goal. It uses no
+external image or PDF processing libraries; all image conversion and PDF
+generation is implemented in pure Python using only the standard library.
 
 Basic Usage
 -----------

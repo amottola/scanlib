@@ -2,17 +2,25 @@
 
 A multiplatform document scanning library for Python.
 
-scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends:
-
-- **Linux**: SANE via ctypes (requires `libsane`)
-- **macOS**: ImageCaptureCore via pyobjc (no extra install needed)
-- **Windows**: TWAIN via pytwain (installed automatically)
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries; all image conversion and PDF generation is implemented in pure Python using only the standard library.
 
 ## Installation
 
 ```bash
 pip install scanlib
 ```
+
+### Platform Dependencies
+
+scanlib uses conditional dependencies that are installed automatically by pip on each platform:
+
+| Platform | Backend | Python dependency | System requirement |
+|----------|---------|-------------------|--------------------|
+| **Linux** | SANE (ctypes) | *none* | `libsane` — install via your package manager (e.g. `apt install libsane-dev`, `dnf install sane-backends`) |
+| **macOS** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (installed automatically) | *none* — uses the built-in macOS framework |
+| **Windows** | TWAIN (pytwain) | `pytwain` (installed automatically) | *none* — uses the TWAIN interface built into Windows |
+
+On Linux, the only external requirement is having `libsane` installed at the system level. On macOS and Windows, `pip install scanlib` is all you need — the required Python bindings are pulled in automatically and the scanning frameworks are provided by the OS.
 
 ## Quick Start
 
@@ -98,6 +106,10 @@ with scanners[0] as scanner:
 ## Thread Safety
 
 All scanlib operations can be called from any thread. The library internally dispatches to the correct thread for backends that require it (macOS ImageCaptureCore, Windows TWAIN).
+
+## About
+
+This project was built with the help of [Claude Code](https://claude.ai/code).
 
 ## License
 
