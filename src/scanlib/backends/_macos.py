@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import math
-import struct
-import tempfile
-from pathlib import Path
 
 import ImageCaptureCore
 import objc
-from Foundation import NSDate, NSDefaultRunLoopMode, NSRunLoop, NSURL
+from Foundation import NSDate, NSDefaultRunLoopMode, NSRunLoop
 
 from .._types import (
     ColorMode,
@@ -20,7 +17,7 @@ from .._types import (
     ScanOptions,
     ScanSource,
 )
-from ._util import MM_PER_INCH, check_progress
+from ._util import MM_PER_INCH, check_progress, raw_to_png
 
 _ICC_SOURCE_MAP = {
     ImageCaptureCore.ICScannerFunctionalUnitTypeFlatbed: ScanSource.FLATBED,
@@ -37,16 +34,7 @@ _COLOR_MODE_TO_PIXEL_DATA_TYPE = {
 }
 
 # ICScannerTransferMode
-_TRANSFER_MODE_FILE_BASED = 0
 _TRANSFER_MODE_MEMORY_BASED = 1
-
-
-def _read_png_dimensions(data: bytes) -> tuple[int, int]:
-    """Read width and height from PNG file bytes."""
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ScanError("Invalid PNG data")
-    width, height = struct.unpack(">II", data[16:24])
-    return width, height
 
 
 def _measurement_factor(unit: int) -> float | None:
@@ -94,11 +82,28 @@ class _ScanDelegate(ImageCaptureCore.NSObject):
         self = objc.super(_ScanDelegate, self).init()
         if self is None:
             return None
-        self.scanned_urls = []
+        self.completed_pages = []
+        self._current_bands = []
+        self._current_width = 0
+        self._current_height = 0
+        self._current_bpc = 0
+        self._current_nc = 0
+        self._current_pdt = 0
         self.error = None
         self._done = False
         self._session_open = False
         return self
+
+    def _finish_page(self):
+        self.completed_pages.append((
+            self._current_bands,
+            self._current_width,
+            self._current_height,
+            self._current_bpc,
+            self._current_nc,
+            self._current_pdt,
+        ))
+        self._current_bands = []
 
     def device_didOpenSessionWithError_(self, device, error):
         if error:
@@ -107,8 +112,18 @@ class _ScanDelegate(ImageCaptureCore.NSObject):
         else:
             self._session_open = True
 
-    def scannerDevice_didScanToURL_(self, device, url):
-        self.scanned_urls.append(url)
+    def scannerDevice_didScanToBandData_(self, device, data):
+        start_row = data.dataStartRow()
+        if start_row == 0 and self._current_bands:
+            self._finish_page()
+
+        raw = bytes(data.dataBuffer())
+        self._current_bands.append((start_row, data.dataNumRows(), data.bytesPerRow(), raw))
+        self._current_width = data.fullImageWidth()
+        self._current_height = data.fullImageHeight()
+        self._current_bpc = data.bitsPerComponent()
+        self._current_nc = data.numComponents()
+        self._current_pdt = data.pixelDataType()
 
     def scannerDevice_didCompleteScanWithError_(self, device, error):
         if error:
@@ -203,6 +218,68 @@ def _read_defaults(device: object, sources: list[ScanSource]) -> ScannerDefaults
         )
     except Exception:
         return None
+
+
+def _assemble_image(
+    bands: list[tuple[int, int, int, bytes]],
+    width: int,
+    height: int,
+    bpc: int,
+    nc: int,
+    pdt: int,
+) -> tuple[bytes, int, int, int, int]:
+    """Assemble band data into a complete raw image with PNG filter bytes.
+
+    Returns (filtered_data, width, height, color_type, bit_depth).
+    """
+    pixel_row_bytes = width * nc * max(bpc // 8, 1)
+
+    # Allocate full image buffer
+    full_buf = bytearray(height * pixel_row_bytes)
+
+    # Sort bands by start row and copy into buffer
+    for start_row, num_rows, bytes_per_row, raw in sorted(bands):
+        for r in range(num_rows):
+            row_idx = start_row + r
+            if row_idx >= height:
+                break
+            src_off = r * bytes_per_row
+            dst_off = row_idx * pixel_row_bytes
+            full_buf[dst_off:dst_off + pixel_row_bytes] = (
+                raw[src_off:src_off + pixel_row_bytes]
+            )
+
+    # Map pixel data type to PNG color type
+    if pdt == 0:  # BW — 1-bit grayscale
+        color_type = 0
+        bit_depth = 1
+        packed_row = (width + 7) // 8
+        filtered = bytearray()
+        for y in range(height):
+            filtered.append(0)
+            filtered.extend(
+                full_buf[y * pixel_row_bytes:y * pixel_row_bytes + packed_row]
+            )
+    elif pdt == 1:  # Gray — 8-bit grayscale
+        color_type = 0
+        bit_depth = 8
+        filtered = bytearray()
+        for y in range(height):
+            filtered.append(0)
+            filtered.extend(
+                full_buf[y * pixel_row_bytes:(y + 1) * pixel_row_bytes]
+            )
+    else:  # RGB (2) and others — 8-bit RGB
+        color_type = 2
+        bit_depth = 8
+        filtered = bytearray()
+        for y in range(height):
+            filtered.append(0)
+            filtered.extend(
+                full_buf[y * pixel_row_bytes:(y + 1) * pixel_row_bytes]
+            )
+
+    return bytes(filtered), width, height, color_type, bit_depth
 
 
 class MacOSBackend:
@@ -373,78 +450,67 @@ class MacOSBackend:
             raise ScanError("Scanner is not open")
 
         try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                downloads_url = NSURL.fileURLWithPath_(tmp_dir)
-                device.setDownloadsDirectory_(downloads_url)
-                device.setDocumentName_("scanlib_scan")
-                device.setDocumentUTI_("public.png")
-                device.setTransferMode_(_TRANSFER_MODE_FILE_BASED)
+            device.setTransferMode_(_TRANSFER_MODE_MEMORY_BASED)
 
-                # Select scan source if specified
-                if options.source is not None:
-                    icc_type = _SCAN_SOURCE_TO_ICC.get(options.source)
-                    if icc_type is not None:
-                        unit_types = device.availableFunctionalUnitTypes()
-                        if unit_types and icc_type in unit_types:
-                            device.requestSelectFunctionalUnit_(icc_type)
+            # Select scan source if specified
+            if options.source is not None:
+                icc_type = _SCAN_SOURCE_TO_ICC.get(options.source)
+                if icc_type is not None:
+                    unit_types = device.availableFunctionalUnitTypes()
+                    if unit_types and icc_type in unit_types:
+                        device.requestSelectFunctionalUnit_(icc_type)
 
-                # Configure functional unit settings
-                fu = device.selectedFunctionalUnit()
-                if fu is not None:
-                    fu.setResolution_(options.dpi)
-                    pixel_type = _COLOR_MODE_TO_PIXEL_DATA_TYPE.get(options.color_mode)
-                    if pixel_type is not None:
-                        fu.setPixelDataType_(pixel_type)
+            # Configure functional unit settings
+            fu = device.selectedFunctionalUnit()
+            if fu is not None:
+                fu.setResolution_(options.dpi)
+                pixel_type = _COLOR_MODE_TO_PIXEL_DATA_TYPE.get(options.color_mode)
+                if pixel_type is not None:
+                    fu.setPixelDataType_(pixel_type)
 
-                    if options.page_size is not None:
-                        factor = _measurement_factor(fu.measurementUnit())
-                        if factor is None:
-                            factor = MM_PER_INCH * 10  # fallback: assume inches
-                        w_val = options.page_size.width / factor
-                        h_val = options.page_size.height / factor
-                        fu.setScanArea_(((0, 0), (w_val, h_val)))
+                if options.page_size is not None:
+                    factor = _measurement_factor(fu.measurementUnit())
+                    if factor is None:
+                        factor = MM_PER_INCH * 10  # fallback: assume inches
+                    w_val = options.page_size.width / factor
+                    h_val = options.page_size.height / factor
+                    fu.setScanArea_(((0, 0), (w_val, h_val)))
 
-                check_progress(options.progress, 0)
+            check_progress(options.progress, 0)
 
-                # Reset delegate for scan phase
-                scan_delegate._done = False
-                scan_delegate.error = None
-                scan_delegate.scanned_urls = []
+            # Reset delegate for scan phase
+            scan_delegate._done = False
+            scan_delegate.error = None
+            scan_delegate.completed_pages = []
+            scan_delegate._current_bands = []
 
-                device.requestScan()
-                try:
-                    _run_until(scan_delegate, timeout=120.0, progress=options.progress)
-                except ScanAborted:
-                    device.cancelScan()
-                    raise
+            device.requestScan()
+            try:
+                _run_until(scan_delegate, timeout=120.0, progress=options.progress)
+            except ScanAborted:
+                device.cancelScan()
+                raise
 
-                if scan_delegate.error:
-                    err_lower = scan_delegate.error.lower()
-                    if "cancel" in err_lower or "abort" in err_lower:
-                        raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
-                    raise ScanError(f"Scan failed: {scan_delegate.error}")
+            if scan_delegate.error:
+                err_lower = scan_delegate.error.lower()
+                if "cancel" in err_lower or "abort" in err_lower:
+                    raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
+                raise ScanError(f"Scan failed: {scan_delegate.error}")
 
-                # Collect scanned files — either from the delegate callback
-                # or by scanning the downloads directory (workaround for
-                # macOS Sequoia where didScanToURL: may not fire).
-                file_paths: list[Path] = []
-                for url in scan_delegate.scanned_urls:
-                    file_paths.append(Path(url.path()))
+            # Flush the last (or only) page
+            if scan_delegate._current_bands:
+                scan_delegate._finish_page()
 
-                if not file_paths:
-                    # Fallback: check the downloads directory for files
-                    file_paths = sorted(Path(tmp_dir).iterdir())
+            if not scan_delegate.completed_pages:
+                raise ScanError("Scan completed but no image data was received")
 
-                if not file_paths:
-                    raise ScanError("Scan completed but no output files were produced")
-
-                pages: list[ScannedPage] = []
-                for path in file_paths:
-                    png_data = path.read_bytes()
-                    width, height = _read_png_dimensions(png_data)
-                    pages.append(ScannedPage(
-                        png_data=png_data, width=width, height=height
-                    ))
+            pages: list[ScannedPage] = []
+            for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
+                filtered, width, height, color_type, bit_depth = _assemble_image(
+                    bands, w, h, bpc, nc, pdt
+                )
+                png_data = raw_to_png(filtered, width, height, color_type, bit_depth)
+                pages.append(ScannedPage(png_data=png_data, width=width, height=height))
 
             check_progress(options.progress, 100)
             return pages
