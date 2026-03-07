@@ -59,7 +59,7 @@ def _measurement_factor(unit: int) -> float | None:
     return None
 
 
-class _BrowserDelegate(ImageCaptureCore.NSObject):
+class _BrowserDelegate(NSObject):
     """Delegate for ICDeviceBrowser to collect discovered scanners."""
 
     def init(self):
@@ -82,11 +82,11 @@ class _BrowserDelegate(ImageCaptureCore.NSObject):
 
 
 class _ScanDelegate(NSObject):
-    """Delegate for ICScannerDevice to handle the full scan lifecycle.
+    """Delegate for ICScannerDevice — a fresh instance is created per phase.
 
-    Uses memory-based transfer — band data is accumulated via
-    ``scannerDevice:didScanToBandData:`` callbacks and assembled into
-    complete images after the scan completes.
+    Open phase uses ``_session_open``; close phase uses ``_session_closed``;
+    scan phase accumulates band data via ``scannerDevice:didScanToBandData:``
+    and signals completion through ``_done``.
     """
 
     def init(self):
@@ -446,7 +446,7 @@ class MacOSBackend:
         # Retry opening the session.  Network scanners may refuse if the
         # previous session close hasn't fully propagated yet.
         last_error = None
-        for attempt in range(3):
+        for _attempt in range(3):
             scan_delegate = _ScanDelegate.alloc().init()
             device.setDelegate_(scan_delegate)
             device.requestOpenSession()

@@ -54,17 +54,18 @@ Backends produce `ScannedPage` objects containing raw PNG bytes. `_pdf.py` parse
 
 ### Multi-page scanning
 
-- **Feeder**: backends loop automatically (SANE detects "no docs" error, TWAIN checks `more_pending` flag, macOS receives one file per page via `didScanToURL:`)
+- **Feeder**: backends loop automatically (SANE detects "no docs" error, TWAIN checks `more_pending` flag, macOS receives all pages in one `requestScan()` with page boundaries detected by `dataStartRow` resetting to 0)
 - **Flatbed multi-page**: the `next_page` callback is called after each page; return `True` to scan another
 
 ### macOS memory-based transfer
 
-The macOS backend uses `ICScannerTransferModeMemoryBased` with `didScanToBandData:` delegate callbacks. Band data is accumulated per-page in `_ScanDelegate`, then stitched into complete images by `_assemble_image()` which produces PNG-filter-prefixed data for `raw_to_png()`.
+The macOS backend uses `ICScannerTransferModeMemoryBased` with `scannerDevice:didScanToBandData:` delegate callbacks. Band data is accumulated per-page in `_ScanDelegate`, then stitched into complete images by `_assemble_image()` which produces PNG-filter-prefixed data for `raw_to_png()`.
 
 Key implementation details:
-- `setBitDepth_(8)` **must** be called on the functional unit before scanning — without it the scanner may complete instantly with no data
-- A **fresh delegate** is created for each scan in `_scan_pages_impl` — reusing the delegate from `_open_scanner_impl` (which goes through FU probing) causes `requestScan()` to complete instantly with no data
+- **Bit depth must be set** on the functional unit before scanning — the backend queries `supportedBitDepths` (an `NSIndexSet`) and picks 1-bit for BW or 8-bit for gray/color. Without setting bit depth the scanner may complete instantly with no data
+- A **fresh delegate** is created for each phase (open, scan, close) — reusing delegates across phases causes `requestScan()` to complete instantly with no data
 - Session open has **retry logic** (up to 3 attempts with 2s delays) because network scanners may refuse reopening immediately after a close
+- Open sessions are tracked via a simple `_open_sessions` set (no delegate caching needed)
 - The scanner may return extra components (e.g. 4-component RGBX for RGB mode); `_assemble_image()` strips the extra channel
 
 ## Conventions

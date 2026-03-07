@@ -114,6 +114,6 @@ All scanlib operations can be called from any thread. The library
 internally dispatches operations to the correct thread for backends that
 require it (macOS ImageCaptureCore, Windows TWAIN).
 
-Note that ``progress`` and ``next_page`` callbacks execute on an internal
-worker thread. If your callbacks update a GUI, dispatch to your UI thread
-accordingly.
+Note that ``progress`` and ``next_page`` callbacks may execute on an
+internal thread. If your callbacks update a GUI, dispatch to your UI
+thread accordingly.
