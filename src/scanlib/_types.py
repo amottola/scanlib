@@ -63,6 +63,15 @@ class PageSize:
 
 
 @dataclass(frozen=True)
+class ScannerDefaults:
+    """Default settings detected from the device after opening."""
+
+    dpi: int
+    color_mode: ColorMode
+    source: ScanSource | None
+
+
+@dataclass(frozen=True)
 class ScanOptions:
     """Options for a scan operation."""
 
@@ -124,6 +133,9 @@ class Scanner:
         self._backend_impl = _backend_impl
         self._sources: list[ScanSource] = []
         self._max_page_sizes: dict[ScanSource, PageSize] = {}
+        self._resolutions: list[int] = []
+        self._color_modes: list[ColorMode] = []
+        self._defaults: ScannerDefaults | None = None
         self._is_open = False
 
     # --- Read-only properties (always available) ---
@@ -158,6 +170,19 @@ class Scanner:
         return self._sources
 
     @property
+    def defaults(self) -> ScannerDefaults | None:
+        """Default settings and supported values detected from the device.
+
+        Returns ``None`` if the backend could not determine defaults.
+        Only available after :meth:`open`.
+        """
+        if not self._is_open:
+            raise ScannerNotOpenError(
+                "Scanner must be opened before querying defaults"
+            )
+        return self._defaults
+
+    @property
     def max_page_sizes(self) -> dict[ScanSource, PageSize]:
         """Maximum scan area per source as a :class:`PageSize` (1/10 mm).
 
@@ -170,6 +195,24 @@ class Scanner:
                 "Scanner must be opened before querying max page sizes"
             )
         return self._max_page_sizes
+
+    @property
+    def resolutions(self) -> list[int]:
+        """Supported DPI values. Only populated after :meth:`open`."""
+        if not self._is_open:
+            raise ScannerNotOpenError(
+                "Scanner must be opened before querying resolutions"
+            )
+        return self._resolutions
+
+    @property
+    def color_modes(self) -> list[ColorMode]:
+        """Supported color modes. Only populated after :meth:`open`."""
+        if not self._is_open:
+            raise ScannerNotOpenError(
+                "Scanner must be opened before querying color modes"
+            )
+        return self._color_modes
 
     # --- Session management ---
 

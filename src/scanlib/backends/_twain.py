@@ -14,6 +14,7 @@ from .._types import (
     ScanError,
     ScannedPage,
     Scanner,
+    ScannerDefaults,
     ScanOptions,
     ScanSource,
 )
@@ -153,6 +154,63 @@ def _create_hidden_window() -> int:
     return hwnd
 
 
+_TWAIN_PIXEL_TO_COLOR = {0: ColorMode.BW, 1: ColorMode.GRAY, 2: ColorMode.COLOR}
+
+
+def _read_twain_resolutions(src: object) -> list[int]:
+    """Read supported resolutions from TWAIN capabilities."""
+    try:
+        res_values = src.get_capability(twain.ICAP_XRESOLUTION)
+        if isinstance(res_values, (list, tuple)):
+            return sorted(int(v) for v in res_values)
+        if res_values is not None:
+            return [int(res_values)]
+    except Exception:
+        pass
+    return []
+
+
+def _read_twain_color_modes(src: object) -> list[ColorMode]:
+    """Read supported color modes from TWAIN capabilities."""
+    try:
+        pt_values = src.get_capability(twain.ICAP_PIXELTYPE)
+        if isinstance(pt_values, (list, tuple)):
+            modes: list[ColorMode] = []
+            for v in pt_values:
+                mapped = _TWAIN_PIXEL_TO_COLOR.get(int(v))
+                if mapped is not None and mapped not in modes:
+                    modes.append(mapped)
+            return modes
+    except Exception:
+        pass
+    return []
+
+
+def _read_twain_defaults(src: object, sources: list[ScanSource]) -> ScannerDefaults | None:
+    """Read default settings from TWAIN source capabilities."""
+    try:
+        try:
+            dpi = int(src.get_capability(twain.ICAP_XRESOLUTION))
+        except Exception:
+            dpi = 300
+
+        try:
+            pixel_type = int(src.get_capability(twain.ICAP_PIXELTYPE))
+            color_mode = _TWAIN_PIXEL_TO_COLOR.get(pixel_type, ColorMode.COLOR)
+        except Exception:
+            color_mode = ColorMode.COLOR
+
+        source = sources[0] if sources else None
+
+        return ScannerDefaults(
+            dpi=dpi,
+            color_mode=color_mode,
+            source=source,
+        )
+    except Exception:
+        return None
+
+
 class TwainBackend:
     """Windows scanning backend using pytwain (TWAIN)."""
 
@@ -210,6 +268,10 @@ class TwainBackend:
                     scanner._max_page_sizes[source] = ps
         except Exception:
             pass
+
+        scanner._resolutions = _read_twain_resolutions(src)
+        scanner._color_modes = _read_twain_color_modes(src)
+        scanner._defaults = _read_twain_defaults(src, scanner._sources)
 
     def close_scanner(self, scanner: Scanner) -> None:
         handle = self._handles.pop(scanner.name, None)

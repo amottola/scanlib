@@ -369,3 +369,78 @@ class TestSaneBackend:
         pages = backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.BW))
         assert len(pages) == 1
         assert pages[0].png_data.startswith(b"\x89PNG")
+
+    def test_open_scanner_populates_defaults(self, mock_sane):
+        """Defaults are read from device options after open."""
+        mock_dev = _make_mock_dev([
+            ("source", "Source", "", 3, 0, 0, 0,
+             ["Flatbed", "Automatic Document Feeder"]),
+            ("mode", "Mode", "", 3, 0, 0, 0,
+             ["color", "gray", "lineart"]),
+            ("resolution", "Resolution", "", 1, 4, 0, 0,
+             [75, 150, 300, 600, 1200]),
+        ])
+        mock_dev.get_option.side_effect = lambda name: {
+            "resolution": 300,
+            "mode": "color",
+            "source": "Flatbed",
+        }[name]
+
+        mock_sane.get_devices.return_value = [
+            ("epson:usb:001", "Epson", "GT-S50", "flatbed scanner"),
+        ]
+        mock_sane.open.return_value = mock_dev
+
+        backend = _make_backend()
+        scanners = backend.list_scanners()
+        backend.open_scanner(scanners[0])
+
+        defaults = scanners[0]._defaults
+        assert defaults is not None
+        assert defaults.dpi == 300
+        assert defaults.color_mode == ColorMode.COLOR
+        assert defaults.source == ScanSource.FLATBED
+
+        assert 300 in scanners[0]._resolutions
+        assert 600 in scanners[0]._resolutions
+        assert ColorMode.COLOR in scanners[0]._color_modes
+        assert ColorMode.GRAY in scanners[0]._color_modes
+        assert ColorMode.BW in scanners[0]._color_modes
+
+    def test_open_scanner_resolutions_from_range(self, mock_sane):
+        """Resolution constraint as range tuple produces a list."""
+        mock_dev = _make_mock_dev([
+            ("resolution", "Resolution", "", 1, 4, 0, 0, (75, 1200, 75)),
+        ])
+        mock_dev.get_option.side_effect = lambda name: {
+            "resolution": 300,
+            "mode": "color",
+        }.get(name)
+
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.open.return_value = mock_dev
+
+        backend = _make_backend()
+        scanners = backend.list_scanners()
+        backend.open_scanner(scanners[0])
+
+        assert 75 in scanners[0]._resolutions
+        assert 300 in scanners[0]._resolutions
+        assert 1200 in scanners[0]._resolutions
+
+    def test_open_scanner_defaults_none_on_failure(self, mock_sane):
+        """Defaults gracefully return None if get_option fails entirely."""
+        mock_dev = _make_mock_dev()
+        mock_dev.get_option.side_effect = Exception("not supported")
+
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.open.return_value = mock_dev
+
+        backend = _make_backend()
+        scanners = backend.list_scanners()
+        backend.open_scanner(scanners[0])
+
+        # Should still produce defaults (with fallback values), not crash
+        defaults = scanners[0]._defaults
+        assert defaults is not None
+        assert defaults.dpi == 300

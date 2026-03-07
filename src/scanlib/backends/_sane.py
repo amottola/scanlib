@@ -15,6 +15,7 @@ from .._types import (
     ScanError,
     ScannedPage,
     Scanner,
+    ScannerDefaults,
     ScanOptions,
     ScanSource,
 )
@@ -457,6 +458,8 @@ _COLOR_MODE_MAP = {
     ColorMode.BW: "lineart",
 }
 
+_SANE_MODE_TO_COLOR = {v: k for k, v in _COLOR_MODE_MAP.items()}
+
 _SANE_SOURCE_MAP = {
     "flatbed": ScanSource.FLATBED,
     "automatic document feeder": ScanSource.FEEDER,
@@ -505,6 +508,72 @@ def _parse_max_page_size(opts: list[tuple]) -> PageSize | None:
     if max_x is not None and max_y is not None:
         return PageSize(width=math.ceil(max_x * 10), height=math.ceil(max_y * 10))
     return None
+
+
+def _parse_resolutions(opts: list[tuple]) -> list[int]:
+    """Extract supported resolutions from SANE option descriptors."""
+    for opt in opts:
+        if opt[0] == "resolution":
+            constraint = opt[7]
+            if isinstance(constraint, (list, tuple)):
+                if len(constraint) == 3 and isinstance(constraint[0], (int, float)):
+                    lo, hi, step = int(constraint[0]), int(constraint[1]), int(constraint[2] or 1)
+                    step = max(1, step)
+                    if (hi - lo) // step <= 1000:
+                        return list(range(lo, hi + 1, step))
+                    return list(range(lo, hi + 1, (hi - lo) // 20))
+                return [int(v) for v in constraint if isinstance(v, (int, float))]
+            break
+    return []
+
+
+def _parse_color_modes(opts: list[tuple]) -> list[ColorMode]:
+    """Extract supported color modes from SANE option descriptors."""
+    for opt in opts:
+        if opt[0] == "mode":
+            constraint = opt[7]
+            if isinstance(constraint, (list, tuple)):
+                modes: list[ColorMode] = []
+                for val in constraint:
+                    mapped = _SANE_MODE_TO_COLOR.get(str(val).lower())
+                    if mapped is not None and mapped not in modes:
+                        modes.append(mapped)
+                return modes
+            break
+    return []
+
+
+def _read_defaults(dev: _SaneDevice, opts: list[tuple], sources: list[ScanSource]) -> ScannerDefaults | None:
+    """Read default settings from SANE device options."""
+    try:
+        try:
+            dpi = int(dev.get_option("resolution"))
+        except Exception:
+            dpi = 300
+
+        try:
+            mode_str = str(dev.get_option("mode")).lower()
+            color_mode = _SANE_MODE_TO_COLOR.get(mode_str, ColorMode.COLOR)
+        except Exception:
+            color_mode = ColorMode.COLOR
+
+        source: ScanSource | None = None
+        try:
+            source_str = str(dev.get_option("source")).lower()
+            for pattern, src in _SANE_SOURCE_MAP.items():
+                if pattern in source_str:
+                    source = src
+                    break
+        except Exception:
+            source = sources[0] if sources else None
+
+        return ScannerDefaults(
+            dpi=dpi,
+            color_mode=color_mode,
+            source=source,
+        )
+    except Exception:
+        return None
 
 
 def _scan_one_page(dev: _SaneDevice, color_mode: ColorMode) -> ScannedPage:
@@ -639,6 +708,10 @@ class SaneBackend:
             ps = _parse_max_page_size(source_opts)
             if ps is not None:
                 scanner._max_page_sizes[source] = ps
+
+        scanner._resolutions = _parse_resolutions(opts)
+        scanner._color_modes = _parse_color_modes(opts)
+        scanner._defaults = _read_defaults(dev, opts, scanner._sources)
 
     def close_scanner(self, scanner: Scanner) -> None:
         dev = self._handles.pop(scanner.name, None)

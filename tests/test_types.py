@@ -6,6 +6,7 @@ from scanlib._types import (
     ScanAborted,
     ScanLibError,
     Scanner,
+    ScannerDefaults,
     ScannerNotOpenError,
     ScanOptions,
     ScanSource,
@@ -56,6 +57,91 @@ class TestScanner:
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
         with pytest.raises(ScannerNotOpenError):
             s.scan()
+
+    def test_defaults_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            _ = s.defaults
+
+    def test_defaults_none_by_default(self):
+        mock_backend = type("B", (), {
+            "open_scanner": lambda self, s: None,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.defaults is None
+
+    def test_defaults_populated(self):
+        defaults = ScannerDefaults(
+            dpi=300, color_mode=ColorMode.COLOR, source=ScanSource.FLATBED,
+        )
+        def open_scanner(self, s):
+            s._defaults = defaults
+        mock_backend = type("B", (), {
+            "open_scanner": open_scanner,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.defaults is defaults
+            assert s.defaults.dpi == 300
+
+    def test_resolutions_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            _ = s.resolutions
+
+    def test_resolutions_default_empty(self):
+        mock_backend = type("B", (), {
+            "open_scanner": lambda self, s: None,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.resolutions == []
+
+    def test_resolutions_populated(self):
+        def open_scanner(self, s):
+            s._resolutions = [150, 300, 600]
+        mock_backend = type("B", (), {
+            "open_scanner": open_scanner,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.resolutions == [150, 300, 600]
+
+    def test_color_modes_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            _ = s.color_modes
+
+    def test_color_modes_default_empty(self):
+        mock_backend = type("B", (), {
+            "open_scanner": lambda self, s: None,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.color_modes == []
+
+    def test_color_modes_populated(self):
+        def open_scanner(self, s):
+            s._color_modes = [ColorMode.COLOR, ColorMode.GRAY]
+        mock_backend = type("B", (), {
+            "open_scanner": open_scanner,
+            "close_scanner": lambda self, s: None,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            assert s.color_modes == [ColorMode.COLOR, ColorMode.GRAY]
 
     def test_max_page_sizes_raises_when_not_open(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")

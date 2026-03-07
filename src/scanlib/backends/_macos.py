@@ -10,11 +10,13 @@ import objc
 from Foundation import NSDate, NSDefaultRunLoopMode, NSRunLoop, NSURL
 
 from .._types import (
+    ColorMode,
     PageSize,
     ScanAborted,
     ScanError,
     ScannedPage,
     Scanner,
+    ScannerDefaults,
     ScanOptions,
     ScanSource,
 )
@@ -26,6 +28,17 @@ _ICC_SOURCE_MAP = {
 }
 
 _SCAN_SOURCE_TO_ICC = {v: k for k, v in _ICC_SOURCE_MAP.items()}
+
+# ICScannerPixelDataType: 0=BW, 1=Gray, 2=RGB, 3=Palette, 4=CMY, 5=CMYK, 6=YUV, 7=YUVK, 8=CIEXYZ
+_COLOR_MODE_TO_PIXEL_DATA_TYPE = {
+    ColorMode.BW: 0,
+    ColorMode.GRAY: 1,
+    ColorMode.COLOR: 2,
+}
+
+# ICScannerTransferMode
+_TRANSFER_MODE_FILE_BASED = 0
+_TRANSFER_MODE_MEMORY_BASED = 1
 
 
 def _read_png_dimensions(data: bytes) -> tuple[int, int]:
@@ -148,6 +161,48 @@ def _read_sources_from_device(device: object) -> list[ScanSource]:
             if mapped is not None:
                 sources.append(mapped)
     return sources
+
+
+def _read_resolutions(device: object) -> list[int]:
+    """Read supported resolutions from the selected functional unit."""
+    try:
+        fu = device.selectedFunctionalUnit()
+        if fu is None:
+            return []
+        supported = fu.supportedResolutions()
+        if supported is None:
+            return []
+        resolutions: list[int] = []
+        idx = supported.firstIndex()
+        while idx != 2**63 - 1:  # NSNotFound
+            resolutions.append(int(idx))
+            idx = supported.indexGreaterThanIndex_(idx)
+        return sorted(resolutions)
+    except Exception:
+        return []
+
+
+def _read_defaults(device: object, sources: list[ScanSource]) -> ScannerDefaults | None:
+    """Read default settings from the selected functional unit."""
+    try:
+        fu = device.selectedFunctionalUnit()
+        if fu is None:
+            return None
+
+        try:
+            dpi = int(fu.resolution())
+        except Exception:
+            dpi = 300
+
+        source = sources[0] if sources else None
+
+        return ScannerDefaults(
+            dpi=dpi,
+            color_mode=ColorMode.COLOR,
+            source=source,
+        )
+    except Exception:
+        return None
 
 
 class MacOSBackend:
@@ -298,6 +353,10 @@ class MacOSBackend:
             except Exception:
                 pass
 
+        scanner._resolutions = _read_resolutions(device)
+        scanner._color_modes = [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
+        scanner._defaults = _read_defaults(device, scanner._sources)
+
     def close_scanner(self, scanner: Scanner) -> None:
         device = self._devices.get(scanner.name)
         self._delegates.pop(scanner.name, None)
@@ -319,6 +378,7 @@ class MacOSBackend:
                 device.setDownloadsDirectory_(downloads_url)
                 device.setDocumentName_("scanlib_scan")
                 device.setDocumentUTI_("public.png")
+                device.setTransferMode_(_TRANSFER_MODE_FILE_BASED)
 
                 # Select scan source if specified
                 if options.source is not None:
@@ -328,14 +388,18 @@ class MacOSBackend:
                         if unit_types and icc_type in unit_types:
                             device.requestSelectFunctionalUnit_(icc_type)
 
-                # Configure page size on the selected functional unit
-                if options.page_size is not None:
-                    fu = device.selectedFunctionalUnit()
-                    if fu is not None:
+                # Configure functional unit settings
+                fu = device.selectedFunctionalUnit()
+                if fu is not None:
+                    fu.setResolution_(options.dpi)
+                    pixel_type = _COLOR_MODE_TO_PIXEL_DATA_TYPE.get(options.color_mode)
+                    if pixel_type is not None:
+                        fu.setPixelDataType_(pixel_type)
+
+                    if options.page_size is not None:
                         factor = _measurement_factor(fu.measurementUnit())
                         if factor is None:
                             factor = MM_PER_INCH * 10  # fallback: assume inches
-                        # Convert from 1/10 mm to the functional unit's measurement unit
                         w_val = options.page_size.width / factor
                         h_val = options.page_size.height / factor
                         fu.setScanArea_(((0, 0), (w_val, h_val)))
@@ -360,12 +424,23 @@ class MacOSBackend:
                         raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
                     raise ScanError(f"Scan failed: {scan_delegate.error}")
 
-                if not scan_delegate.scanned_urls:
+                # Collect scanned files — either from the delegate callback
+                # or by scanning the downloads directory (workaround for
+                # macOS Sequoia where didScanToURL: may not fire).
+                file_paths: list[Path] = []
+                for url in scan_delegate.scanned_urls:
+                    file_paths.append(Path(url.path()))
+
+                if not file_paths:
+                    # Fallback: check the downloads directory for files
+                    file_paths = sorted(Path(tmp_dir).iterdir())
+
+                if not file_paths:
                     raise ScanError("Scan completed but no output files were produced")
 
                 pages: list[ScannedPage] = []
-                for url in scan_delegate.scanned_urls:
-                    png_data = Path(url.path()).read_bytes()
+                for path in file_paths:
+                    png_data = path.read_bytes()
                     width, height = _read_png_dimensions(png_data)
                     pages.append(ScannedPage(
                         png_data=png_data, width=width, height=height
