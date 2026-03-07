@@ -51,14 +51,16 @@ def _get_backend() -> ScanBackend:
         _backend = SaneBackend()
 
     elif sys.platform == "darwin":
+        from .backends._dispatch import RunLoopDispatcher
         from .backends._macos import MacOSBackend
 
-        _backend = MacOSBackend()
+        _backend = RunLoopDispatcher(MacOSBackend)
 
     elif sys.platform == "win32":
+        from .backends._dispatch import ThreadDispatcher
         from .backends._twain import TwainBackend
 
-        _backend = TwainBackend()
+        _backend = ThreadDispatcher(TwainBackend)
 
     else:
         raise BackendNotAvailableError(f"Unsupported platform: {sys.platform}")
