@@ -614,7 +614,23 @@ class MacOSBackend:
                 pixel_type = _COLOR_MODE_TO_PIXEL_DATA_TYPE.get(options.color_mode)
                 if pixel_type is not None:
                     fu.setPixelDataType_(pixel_type)
-                fu.setBitDepth_(8)
+
+                # Pick bit depth: BW wants 1-bit, everything else 8-bit.
+                # Query supported depths and fall back to 8 if the
+                # preferred depth isn't available.
+                preferred_bpc = 1 if options.color_mode == ColorMode.BW else 8
+                supported_depths = fu.supportedBitDepths()
+                if supported_depths and supported_depths.containsIndex_(preferred_bpc):
+                    fu.setBitDepth_(preferred_bpc)
+                elif supported_depths and supported_depths.count() > 0:
+                    # Use the smallest supported depth >= preferred, or
+                    # just the smallest available.
+                    idx = supported_depths.indexGreaterThanOrEqualToIndex_(preferred_bpc)
+                    if idx == 2**63 - 1:  # NSNotFound
+                        idx = supported_depths.firstIndex()
+                    fu.setBitDepth_(idx)
+                else:
+                    fu.setBitDepth_(8)
 
                 if options.page_size is not None:
                     factor = _measurement_factor(fu.measurementUnit())
