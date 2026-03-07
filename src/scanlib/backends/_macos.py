@@ -348,7 +348,7 @@ class MacOSBackend:
 
     def __init__(self) -> None:
         self._devices: dict[str, object] = {}
-        self._delegates: dict[str, object] = {}
+        self._open_sessions: set[str] = set()
         self._browser = None
         self._browser_delegate = None
         self._lock = threading.Lock()
@@ -490,7 +490,7 @@ class MacOSBackend:
                 NSDate.dateWithTimeIntervalSinceNow_(0.1),
             )
 
-        self._delegates[scanner.name] = scan_delegate
+        self._open_sessions.add(scanner.name)
         scanner._sources = _read_sources_from_device(device)
 
         # Read maximum scan area per functional unit / source.
@@ -565,36 +565,33 @@ class MacOSBackend:
         scanner._defaults = _read_defaults(device, scanner._sources)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
+        self._open_sessions.discard(scanner.name)
         device = self._devices.get(scanner.name)
-        scan_delegate = self._delegates.pop(scanner.name, None)
         if device is not None:
+            close_delegate = _ScanDelegate.alloc().init()
+            device.setDelegate_(close_delegate)
             device.requestCloseSession()
-            if scan_delegate is not None:
-                run_loop = NSRunLoop.currentRunLoop()
-                deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
-                while not scan_delegate._session_closed:
-                    if deadline.timeIntervalSinceNow() <= 0:
-                        break
-                    run_loop.runMode_beforeDate_(
-                        NSDefaultRunLoopMode,
-                        NSDate.dateWithTimeIntervalSinceNow_(0.1),
-                    )
+            run_loop = NSRunLoop.currentRunLoop()
+            deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
+            while not close_delegate._session_closed:
+                if deadline.timeIntervalSinceNow() <= 0:
+                    break
+                run_loop.runMode_beforeDate_(
+                    NSDefaultRunLoopMode,
+                    NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                )
 
     def _scan_pages_impl(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
         device = self._devices.get(scanner.name)
         if device is None:
             raise ScanError("Scanner is not open")
 
-        if scanner.name not in self._delegates:
+        if scanner.name not in self._open_sessions:
             raise ScanError("Scanner is not open")
 
-        # Create a fresh delegate for scanning.  The delegate used during
-        # open_scanner goes through FU probing and various async callbacks
-        # that can leave it in a state where requestScan() completes
-        # instantly with no data.
+        # Create a fresh delegate for each scan.
         scan_delegate = _ScanDelegate.alloc().init()
         device.setDelegate_(scan_delegate)
-        self._delegates[scanner.name] = scan_delegate
 
         try:
             device.setTransferMode_(_TRANSFER_MODE_MEMORY_BASED)
