@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout"]
+docs = ["sphinx", "furo", "sphinx-autodoc-typehints"]
 
 [tool.pytest.ini_options]
 markers = ["hardware: tests requiring a physical scanner"]

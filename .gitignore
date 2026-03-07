@@ -9,6 +9,9 @@ build/
 # Testing
 .pytest_cache/
 
+# Docs
+docs/_build/
+
 # IDEs
 .vscode/
 .idea/
