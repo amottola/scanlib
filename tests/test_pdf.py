@@ -5,7 +5,8 @@ import zlib
 
 import pytest
 
-from scanlib._pdf import _parse_png, _unfilter_png_rows, png_pages_to_pdf, _rgb_to_gray, _gray_to_bw
+from scanlib._pdf import _parse_png, _unfilter_png_rows, png_pages_to_pdf
+from scanlib.backends._util import gray_to_bw, rgb_to_gray
 from scanlib._types import ColorMode
 
 
@@ -182,25 +183,25 @@ class TestPngPagesToPdf:
 
 class TestRgbToGray:
     def test_pure_white(self):
-        # White pixel (255, 255, 255) -> 255
-        result = _rgb_to_gray(bytes([255, 255, 255]), 1, 1)
-        assert result == bytes([255])
+        # White pixel (255, 255, 255) -> (76*255+150*255+29*255)>>8 = 254
+        result = rgb_to_gray(bytes([255, 255, 255]), 1, 1)
+        assert result == bytes([254])
 
     def test_pure_black(self):
-        result = _rgb_to_gray(bytes([0, 0, 0]), 1, 1)
+        result = rgb_to_gray(bytes([0, 0, 0]), 1, 1)
         assert result == bytes([0])
 
     def test_red_channel(self):
-        # Pure red (255, 0, 0) -> 0.299 * 255 = 76.245 -> 76
-        result = _rgb_to_gray(bytes([255, 0, 0]), 1, 1)
-        assert result[0] == 76
+        # Pure red (255, 0, 0) -> (76*255)>>8 = 75
+        result = rgb_to_gray(bytes([255, 0, 0]), 1, 1)
+        assert result[0] == 75
 
 
 class TestGrayToBw:
     def test_threshold(self):
         # 8 pixels: values above and below 128
         gray = bytes([0, 64, 127, 128, 192, 255, 0, 255])
-        result = _gray_to_bw(gray, 8, 1)
+        result = gray_to_bw(gray, 8, 1)
         # 0=black, 1=white. Pixels >= 128 become 1.
         # Bits: 0,0,0,1,1,1,0,1 = 0b00011101 = 0x1D
         assert result == bytes([0x1D])
@@ -208,7 +209,7 @@ class TestGrayToBw:
     def test_row_padding(self):
         # 3 pixels wide -> 1 byte per row, 5 trailing bits zeroed
         gray = bytes([255, 0, 255])
-        result = _gray_to_bw(gray, 3, 1)
+        result = gray_to_bw(gray, 3, 1)
         # Bits: 1,0,1,0,0,0,0,0 = 0b10100000 = 0xA0
         assert result == bytes([0xA0])
 

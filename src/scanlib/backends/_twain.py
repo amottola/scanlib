@@ -4,7 +4,6 @@ import ctypes
 import ctypes.wintypes as wintypes
 import math
 import struct
-import zlib
 
 import twain
 
@@ -18,7 +17,7 @@ from .._types import (
     ScanOptions,
     ScanSource,
 )
-from ._util import MM_PER_INCH, check_progress
+from ._util import MM_PER_INCH, check_progress, raw_to_png
 
 _COLOR_MODE_MAP = {
     ColorMode.COLOR: "color",
@@ -65,11 +64,6 @@ def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
         png_bit_depth = 1
     else:
         raise ScanError(f"Unsupported BMP bit depth: {bits_per_pixel}")
-
-    def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
-        chunk = chunk_type + data
-        crc = struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
-        return struct.pack(">I", len(data)) + chunk + crc
 
     if bits_per_pixel == 1:
         # 1-bit BMP: rows are bit-packed, padded to 4 bytes
@@ -125,14 +119,7 @@ def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
 
         raw_data = b"".join(raw_rows)
 
-    png = b"\x89PNG\r\n\x1a\n"
-    png += _png_chunk(
-        b"IHDR",
-        struct.pack(">IIBBBBB", width, height, png_bit_depth, color_type, 0, 0, 0),
-    )
-    png += _png_chunk(b"IDAT", zlib.compress(raw_data))
-    png += _png_chunk(b"IEND", b"")
-
+    png = raw_to_png(raw_data, width, height, color_type, png_bit_depth)
     return png, width, height
 
 

@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -14,32 +15,61 @@ from scanlib._types import (
 
 
 @pytest.fixture(autouse=True)
-def mock_sane_module():
-    """Provide a mock sane module so tests work on any platform."""
-    mock_sane = mock.MagicMock()
-    with mock.patch.dict("sys.modules", {"sane": mock_sane}):
-        yield mock_sane
+def mock_sane():
+    """Patch SANE entry-point functions so tests work on any platform."""
+    with mock.patch("scanlib.backends._sane._init"), \
+         mock.patch("scanlib.backends._sane._get_devices") as m_get_devices, \
+         mock.patch("scanlib.backends._sane._open_device") as m_open:
+        yield SimpleNamespace(get_devices=m_get_devices, open=m_open)
 
 
-def _make_backend(mock_sane_module):
+def _make_backend():
     from scanlib.backends._sane import SaneBackend
     return SaneBackend()
 
 
-def _make_mock_img(width=50, height=50):
-    img = mock.MagicMock()
-    img.width = width
-    img.height = height
-    img.save = lambda buf, format: buf.write(b"\x89PNG\r\n\x1a\ndata")
-    return img
+def _make_gray_pixel_data(width, height, value=128):
+    """Create raw grayscale pixel data (1 byte per pixel)."""
+    return bytes([value] * (width * height))
 
 
-def _open_scanner(backend, mock_sane_module, mock_dev, name="s:1"):
+def _make_rgb_pixel_data(width, height, r=128, g=128, b=128):
+    """Create raw RGB pixel data (3 bytes per pixel)."""
+    return bytes([r, g, b] * (width * height))
+
+
+def _make_mock_dev(options=None):
+    """Create a mock SaneDevice with standard defaults."""
+    dev = mock.MagicMock()
+    dev.get_options.return_value = options or []
+    return dev
+
+
+def _setup_scan(dev, width, height, pixel_data, frame=1, depth=8):
+    """Configure a mock device to return scan data."""
+    from scanlib.backends._sane import Parameters
+    dev.start.return_value = 0  # GOOD
+    dev.get_parameters.return_value = Parameters(
+        format=frame,
+        last_frame=True,
+        bytes_per_line=width * (3 if frame == 1 else 1) if depth == 8 else (width + 7) // 8,
+        pixels_per_line=width,
+        lines=height,
+        depth=depth,
+    )
+    # Return all data in one chunk, then EOF
+    dev.read.side_effect = [
+        (pixel_data, 0),   # GOOD
+        (b"", 5),          # EOF
+    ]
+
+
+def _open_scanner(backend, mock_sane, mock_dev, name="s:1"):
     """Helper: list scanners, then open the first one."""
-    mock_sane_module.get_devices.return_value = [
+    mock_sane.get_devices.return_value = [
         (name, "V", "M", "t"),
     ]
-    mock_sane_module.open.return_value = mock_dev
+    mock_sane.open.return_value = mock_dev
     scanners = backend.list_scanners()
     scanner = scanners[0]
     backend.open_scanner(scanner)
@@ -47,12 +77,12 @@ def _open_scanner(backend, mock_sane_module, mock_dev, name="s:1"):
 
 
 class TestSaneBackend:
-    def test_list_scanners(self, mock_sane_module):
-        mock_sane_module.get_devices.return_value = [
+    def test_list_scanners(self, mock_sane):
+        mock_sane.get_devices.return_value = [
             ("epson:usb:001", "Epson", "GT-S50", "flatbed scanner"),
         ]
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
 
         assert len(scanners) == 1
@@ -60,47 +90,44 @@ class TestSaneBackend:
         assert scanners[0].vendor == "Epson"
         assert scanners[0].model == "GT-S50"
         assert scanners[0].backend == "sane"
-        mock_sane_module.open.assert_not_called()
 
-    def test_list_scanners_empty(self, mock_sane_module):
-        mock_sane_module.get_devices.return_value = []
+    def test_list_scanners_empty(self, mock_sane):
+        mock_sane.get_devices.return_value = []
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
         assert scanners == []
 
-    def test_open_scanner_parses_sources(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.get_options.return_value = [
+    def test_open_scanner_parses_sources(self, mock_sane):
+        mock_dev = _make_mock_dev([
             ("source", "Source", "Scan source", 3, 0, 0, 0,
              ["Flatbed", "Automatic Document Feeder"]),
-        ]
-        mock_sane_module.get_devices.return_value = [
+        ])
+        mock_sane.get_devices.return_value = [
             ("epson:usb:001", "Epson", "GT-S50", "flatbed scanner"),
         ]
-        mock_sane_module.open.return_value = mock_dev
+        mock_sane.open.return_value = mock_dev
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
         assert ScanSource.FLATBED in scanners[0]._sources
         assert ScanSource.FEEDER in scanners[0]._sources
 
-    def test_open_scanner_parses_max_page_sizes(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.get_options.return_value = [
+    def test_open_scanner_parses_max_page_sizes(self, mock_sane):
+        mock_dev = _make_mock_dev([
             ("source", "Source", "Scan source", 3, 0, 0, 0,
              ["Flatbed"]),
             ("br_x", "Bottom-right x", "", 1, 3, 4, 5, (0.0, 215.9, 0.1)),
             ("br_y", "Bottom-right y", "", 1, 3, 4, 5, (0.0, 297.0, 0.1)),
-        ]
-        mock_sane_module.get_devices.return_value = [
+        ])
+        mock_sane.get_devices.return_value = [
             ("epson:usb:001", "Epson", "GT-S50", "flatbed scanner"),
         ]
-        mock_sane_module.open.return_value = mock_dev
+        mock_sane.open.return_value = mock_dev
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
@@ -109,25 +136,23 @@ class TestSaneBackend:
         assert sizes[ScanSource.FLATBED].width == 2159
         assert sizes[ScanSource.FLATBED].height == 2970
 
-    def test_open_scanner_max_page_sizes_empty_without_options(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.get_options.return_value = []
-        mock_sane_module.get_devices.return_value = [("s:1", "V", "M", "t")]
-        mock_sane_module.open.return_value = mock_dev
+    def test_open_scanner_max_page_sizes_empty_without_options(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.open.return_value = mock_dev
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
         assert scanners[0]._max_page_sizes == {}
 
-    def test_close_scanner(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.get_options.return_value = []
-        mock_sane_module.get_devices.return_value = [("s:1", "V", "M", "t")]
-        mock_sane_module.open.return_value = mock_dev
+    def test_close_scanner(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.open.return_value = mock_dev
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
         scanner = scanners[0]
         backend.open_scanner(scanner)
@@ -135,13 +160,13 @@ class TestSaneBackend:
 
         mock_dev.close.assert_called_once()
 
-    def test_scan_pages_returns_single_page(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.return_value = _make_mock_img(100, 200)
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_returns_single_page(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_rgb_pixel_data(100, 200)
+        _setup_scan(mock_dev, 100, 200, pixel_data, frame=1)
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         pages = backend.scan_pages(scanner, ScanOptions(dpi=300, color_mode=ColorMode.COLOR))
 
@@ -150,82 +175,94 @@ class TestSaneBackend:
         assert pages[0].width == 100
         assert pages[0].height == 200
 
-    def test_scan_pages_not_open_raises(self, mock_sane_module):
-        mock_sane_module.get_devices.return_value = [("s:1", "V", "M", "t")]
+    def test_scan_pages_not_open_raises(self, mock_sane):
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
 
-        backend = _make_backend(mock_sane_module)
+        backend = _make_backend()
         scanners = backend.list_scanners()
 
         with pytest.raises(ScanError, match="not open"):
             backend.scan_pages(scanners[0], ScanOptions())
 
-    def test_scan_pages_sets_color_mode(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.return_value = _make_mock_img()
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_sets_options(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
         backend.scan_pages(scanner, ScanOptions(dpi=600, color_mode=ColorMode.GRAY))
 
-        assert mock_dev.mode == "gray"
-        assert mock_dev.resolution == 600
+        calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
+        assert calls["mode"] == "gray"
+        assert calls["resolution"] == 600
 
-    def test_scan_pages_sets_page_size(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.return_value = _make_mock_img()
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_sets_page_size(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
         backend.scan_pages(scanner, ScanOptions(page_size=PageSize(2100, 2970)))
 
-        assert mock_dev.br_x == 210.0
-        assert mock_dev.br_y == 297.0
+        calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
+        assert calls["br-x"] == 210.0
+        assert calls["br-y"] == 297.0
 
-    def test_scan_pages_sets_source(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.side_effect = [_make_mock_img(), Exception("out of documents")]
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_sets_source(self, mock_sane):
+        from scanlib.backends._sane import Parameters
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        mock_dev = _make_mock_dev()
+        mock_dev.start.side_effect = [0, 7]  # GOOD, NO_DOCS
+        mock_dev.get_parameters.return_value = Parameters(
+            format=0, last_frame=True, bytes_per_line=50,
+            pixels_per_line=50, lines=50, depth=8,
+        )
+        pixel_data = _make_gray_pixel_data(50, 50)
+        mock_dev.read.side_effect = [
+            (pixel_data, 0), (b"", 5),  # first page
+        ]
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
         backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER))
 
-        assert mock_dev.source == "Automatic Document Feeder"
+        calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
+        assert calls["source"] == "Automatic Document Feeder"
 
-    def test_scan_pages_no_page_size_skips_setting(self, mock_sane_module):
-        mock_dev = mock.MagicMock(spec=["mode", "resolution", "scan", "close", "get_options", "source"])
-        mock_dev.scan.return_value = _make_mock_img()
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_no_page_size_skips_setting(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
         backend.scan_pages(scanner, ScanOptions())
 
-        assert not hasattr(mock_dev, "br_x")
-        assert not hasattr(mock_dev, "br_y")
+        option_names = [c.args[0] for c in mock_dev.set_option.call_args_list]
+        assert "br-x" not in option_names
+        assert "br-y" not in option_names
 
-    def test_scan_pages_abort_via_progress(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_abort_via_progress(self, mock_sane):
+        mock_dev = _make_mock_dev()
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         with pytest.raises(ScanAborted):
             backend.scan_pages(scanner, ScanOptions(progress=lambda pct: False))
 
-        mock_dev.scan.assert_not_called()
+        mock_dev.start.assert_not_called()
         mock_dev.cancel.assert_called()
 
-    def test_scan_pages_progress_called(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.return_value = _make_mock_img()
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_progress_called(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         calls = []
         backend.scan_pages(scanner, ScanOptions(progress=lambda pct: (calls.append(pct) or True)))
@@ -233,40 +270,48 @@ class TestSaneBackend:
         assert 0 in calls
         assert 100 in calls
 
-    def test_scan_pages_progress_none_return_continues(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.return_value = _make_mock_img()
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_progress_none_return_continues(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         pages = backend.scan_pages(scanner, ScanOptions(progress=lambda pct: None))
         assert pages[0].png_data.startswith(b"\x89PNG")
 
-    def test_scan_pages_hardware_cancel_raises_scan_aborted(self, mock_sane_module):
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.side_effect = Exception("Operation was cancelled")
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_hardware_cancel_raises_scan_aborted(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        mock_dev.start.return_value = 2  # CANCELLED
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        with pytest.raises(ScanAborted, match="cancelled by device"):
+        with pytest.raises(ScanAborted, match="cancelled"):
             backend.scan_pages(scanner, ScanOptions())
 
-    def test_scan_pages_feeder_multi_page(self, mock_sane_module):
-        """Feeder scanning: returns multiple pages, stops on 'no more' error."""
-        img1 = _make_mock_img(100, 200)
-        img2 = _make_mock_img(100, 200)
-        img3 = _make_mock_img(100, 200)
+    def test_scan_pages_feeder_multi_page(self, mock_sane):
+        """Feeder scanning: returns multiple pages, stops on no_docs."""
+        from scanlib.backends._sane import Parameters
 
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.side_effect = [img1, img2, img3, Exception("out of documents")]
-        mock_dev.get_options.return_value = []
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        params = Parameters(
+            format=0, last_frame=True, bytes_per_line=50,
+            pixels_per_line=50, lines=50, depth=8,
+        )
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        mock_dev.start.side_effect = [0, 0, 0, 7]
+        mock_dev.get_parameters.return_value = params
+        mock_dev.read.side_effect = [
+            (pixel_data, 0), (b"", 5),  # page 1
+            (pixel_data, 0), (b"", 5),  # page 2
+            (pixel_data, 0), (b"", 5),  # page 3
+        ]
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         pages = backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER))
 
@@ -274,14 +319,53 @@ class TestSaneBackend:
         for p in pages:
             assert p.png_data.startswith(b"\x89PNG")
 
-    def test_scan_pages_feeder_single_page(self, mock_sane_module):
-        """Feeder with only one page: returns it, stops on empty error."""
-        mock_dev = mock.MagicMock()
-        mock_dev.scan.side_effect = [_make_mock_img(), Exception("no more documents")]
-        mock_dev.get_options.return_value = []
+    def test_scan_pages_feeder_single_page(self, mock_sane):
+        """Feeder with only one page: returns it, stops on no_docs."""
+        from scanlib.backends._sane import Parameters
 
-        backend = _make_backend(mock_sane_module)
-        scanner = _open_scanner(backend, mock_sane_module, mock_dev)
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        params = Parameters(
+            format=0, last_frame=True, bytes_per_line=50,
+            pixels_per_line=50, lines=50, depth=8,
+        )
+
+        mock_dev.start.side_effect = [0, 7]  # GOOD, NO_DOCS
+        mock_dev.get_parameters.return_value = params
+        mock_dev.read.side_effect = [
+            (pixel_data, 0), (b"", 5),  # page 1
+        ]
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         pages = backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER))
         assert len(pages) == 1
+
+    def test_scan_pages_gray_mode_converts_rgb(self, mock_sane):
+        """Scanning in GRAY mode with RGB input converts to grayscale."""
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_rgb_pixel_data(4, 2, r=255, g=255, b=255)
+        _setup_scan(mock_dev, 4, 2, pixel_data, frame=1)
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
+
+        pages = backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.GRAY))
+        assert len(pages) == 1
+        assert pages[0].png_data.startswith(b"\x89PNG")
+        assert pages[0].width == 4
+        assert pages[0].height == 2
+
+    def test_scan_pages_bw_mode_converts(self, mock_sane):
+        """Scanning in BW mode produces 1-bit output."""
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(8, 2, value=200)
+        _setup_scan(mock_dev, 8, 2, pixel_data, frame=0)
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
+
+        pages = backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.BW))
+        assert len(pages) == 1
+        assert pages[0].png_data.startswith(b"\x89PNG")

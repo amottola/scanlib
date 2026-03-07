@@ -6,6 +6,7 @@ import struct
 import zlib
 
 from ._types import ColorMode
+from .backends._util import gray_to_bw, rgb_to_gray
 
 
 def _parse_png(data: bytes) -> tuple[int, int, int, int, bytes]:
@@ -141,36 +142,6 @@ def _paeth_predictor(a: int, b: int, c: int) -> int:
     return c
 
 
-def _rgb_to_gray(raw_pixels: bytes, width: int, height: int) -> bytes:
-    """Convert 8-bit RGB pixel data to 8-bit grayscale using luminance."""
-    result = bytearray(width * height)
-    src = 0
-    for i in range(width * height):
-        r, g, b = raw_pixels[src], raw_pixels[src + 1], raw_pixels[src + 2]
-        result[i] = int(0.299 * r + 0.587 * g + 0.114 * b + 0.5)
-        src += 3
-    return bytes(result)
-
-
-def _gray_to_bw(gray_pixels: bytes, width: int, height: int) -> bytes:
-    """Convert 8-bit grayscale to 1-bit packed data (row-aligned to byte boundary).
-
-    Pixels with value >= 128 become 1 (white), < 128 become 0 (black).
-    Each row is padded to a whole number of bytes.
-    """
-    row_bytes = (width + 7) // 8
-    result = bytearray(row_bytes * height)
-    for y in range(height):
-        src_offset = y * width
-        dst_offset = y * row_bytes
-        for x in range(width):
-            if gray_pixels[src_offset + x] >= 128:
-                byte_idx = dst_offset + x // 8
-                bit_idx = 7 - (x % 8)
-                result[byte_idx] |= 1 << bit_idx
-    return bytes(result)
-
-
 def png_pages_to_pdf(
     pages: list[tuple[bytes, int, int, int]],
     color_mode: ColorMode = ColorMode.COLOR,
@@ -199,14 +170,14 @@ def png_pages_to_pdf(
         # Apply color mode conversion
         if color_mode == ColorMode.GRAY:
             if color_type == 2:  # RGB → grayscale
-                raw_pixels = _rgb_to_gray(raw_pixels, w, h)
+                raw_pixels = rgb_to_gray(raw_pixels, w, h)
             color_type = 0
             bit_depth = 8
         elif color_mode == ColorMode.BW:
             if color_type == 2:  # RGB → grayscale first
-                raw_pixels = _rgb_to_gray(raw_pixels, w, h)
+                raw_pixels = rgb_to_gray(raw_pixels, w, h)
             if bit_depth == 8:  # 8-bit grayscale → 1-bit
-                raw_pixels = _gray_to_bw(raw_pixels, w, h)
+                raw_pixels = gray_to_bw(raw_pixels, w, h)
             color_type = 0
             bit_depth = 1
 
