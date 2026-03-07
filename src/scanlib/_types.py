@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from typing import Protocol
 
 
 # --- Exceptions ---

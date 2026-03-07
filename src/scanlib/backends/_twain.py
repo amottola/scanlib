@@ -3,7 +3,9 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wintypes
 import math
+import queue
 import struct
+import threading
 
 import twain
 
@@ -212,16 +214,59 @@ def _read_twain_defaults(src: object, sources: list[ScanSource]) -> ScannerDefau
 
 
 class TwainBackend:
-    """Windows scanning backend using pytwain (TWAIN)."""
+    """Windows scanning backend using pytwain (TWAIN).
+
+    Thread-safe: all operations execute on a dedicated worker thread
+    that owns the hidden window handle TWAIN requires.
+    """
 
     def __init__(self) -> None:
         self._handles: dict[str, object] = {}
+        self._queue: queue.Queue = queue.Queue()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._ready.wait()
+
+    def _run(self) -> None:
+        self._ready.set()
+        while True:
+            func, args, event, box = self._queue.get()
+            try:
+                box["value"] = func(*args)
+            except BaseException as exc:
+                box["error"] = exc
+            event.set()
+
+    def _dispatch(self, func, *args):
+        event = threading.Event()
+        box: dict = {}
+        self._queue.put((func, args, event, box))
+        event.wait()
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
+
+    def list_scanners(self) -> list[Scanner]:
+        scanners = self._dispatch(self._list_scanners_impl)
+        for s in scanners:
+            s._backend_impl = self
+        return scanners
+
+    def open_scanner(self, scanner: Scanner) -> None:
+        return self._dispatch(self._open_scanner_impl, scanner)
+
+    def close_scanner(self, scanner: Scanner) -> None:
+        return self._dispatch(self._close_scanner_impl, scanner)
+
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+        return self._dispatch(self._scan_pages_impl, scanner, options)
 
     def _get_source_manager(self) -> twain.SourceManager:
         hwnd = _create_hidden_window()
         return twain.SourceManager(hwnd)
 
-    def list_scanners(self) -> list[Scanner]:
+    def _list_scanners_impl(self) -> list[Scanner]:
         with self._get_source_manager() as sm:
             return [
                 Scanner(
@@ -229,12 +274,11 @@ class TwainBackend:
                     vendor=None,
                     model=None,
                     backend="twain",
-                    _backend_impl=self,
                 )
                 for name in sm.source_list
             ]
 
-    def open_scanner(self, scanner: Scanner) -> None:
+    def _open_scanner_impl(self, scanner: Scanner) -> None:
         try:
             sm = self._get_source_manager()
             sm.__enter__()
@@ -273,7 +317,7 @@ class TwainBackend:
         scanner._color_modes = _read_twain_color_modes(src)
         scanner._defaults = _read_twain_defaults(src, scanner._sources)
 
-    def close_scanner(self, scanner: Scanner) -> None:
+    def _close_scanner_impl(self, scanner: Scanner) -> None:
         handle = self._handles.pop(scanner.name, None)
         if handle is not None:
             sm, src = handle
@@ -286,7 +330,7 @@ class TwainBackend:
             except Exception:
                 pass
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+    def _scan_pages_impl(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
         handle = self._handles.get(scanner.name)
         if handle is None:
             raise ScanError("Scanner is not open")

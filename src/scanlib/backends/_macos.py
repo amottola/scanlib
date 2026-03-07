@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
+import threading
 
 import ImageCaptureCore
 import objc
-from Foundation import NSDate, NSDefaultRunLoopMode, NSRunLoop
+from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSRunLoop
 
 from .._types import (
     ColorMode,
@@ -282,14 +283,46 @@ def _assemble_image(
     return bytes(filtered), width, height, color_type, bit_depth
 
 
+def _make_invoker_cls() -> type:
+    """Create the ObjC helper class for main-thread dispatch."""
+
+    class _Invoker(NSObject):
+        def init(self):
+            self = objc.super(_Invoker, self).init()
+            if self is None:
+                return None
+            self.func = None
+            self.args = ()
+            self.result = None
+            self.error = None
+            return self
+
+        def invoke_(self, _sender: object) -> None:
+            try:
+                self.result = self.func(*self.args)
+            except BaseException as exc:
+                self.error = exc
+
+    return _Invoker
+
+
+_InvokerCls: type | None = None
+
+
 class MacOSBackend:
-    """macOS scanning backend using ImageCaptureCore."""
+    """macOS scanning backend using ImageCaptureCore.
+
+    Thread-safe: a lock serialises access and calls from background
+    threads are forwarded to the main thread via
+    ``performSelectorOnMainThread:withObject:waitUntilDone:``.
+    """
 
     def __init__(self) -> None:
         self._devices: dict[str, object] = {}
         self._delegates: dict[str, object] = {}
         self._browser = None
         self._browser_delegate = None
+        self._lock = threading.Lock()
 
     def _ensure_browser(self) -> _BrowserDelegate:
         """Start the device browser if not already running.
@@ -315,7 +348,45 @@ class MacOSBackend:
         self._browser_delegate = delegate
         return delegate
 
+    def _call(self, func, *args):
+        """Execute *func* on the main thread, blocking until done."""
+        if threading.current_thread() is threading.main_thread():
+            return func(*args)
+
+        global _InvokerCls
+        if _InvokerCls is None:
+            _InvokerCls = _make_invoker_cls()
+
+        invoker = _InvokerCls.alloc().init()
+        invoker.func = func
+        invoker.args = args
+        invoker.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "invoke:", None, True,
+        )
+        if invoker.error is not None:
+            raise invoker.error
+        return invoker.result
+
     def list_scanners(self) -> list[Scanner]:
+        with self._lock:
+            scanners = self._call(self._list_scanners_impl)
+        for s in scanners:
+            s._backend_impl = self
+        return scanners
+
+    def open_scanner(self, scanner: Scanner) -> None:
+        with self._lock:
+            return self._call(self._open_scanner_impl, scanner)
+
+    def close_scanner(self, scanner: Scanner) -> None:
+        with self._lock:
+            return self._call(self._close_scanner_impl, scanner)
+
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+        with self._lock:
+            return self._call(self._scan_pages_impl, scanner, options)
+
+    def _list_scanners_impl(self) -> list[Scanner]:
         delegate = self._ensure_browser()
 
         if not delegate._done:
@@ -337,12 +408,11 @@ class MacOSBackend:
                 vendor=None,
                 model=dev.name(),
                 backend="imagecapture",
-                _backend_impl=self,
             )
             for dev in delegate.scanners
         ]
 
-    def open_scanner(self, scanner: Scanner) -> None:
+    def _open_scanner_impl(self, scanner: Scanner) -> None:
         device = self._devices.get(scanner.name)
         if device is None:
             raise ScanError(f"Scanner {scanner.name!r} not found")
@@ -434,13 +504,13 @@ class MacOSBackend:
         scanner._color_modes = [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
         scanner._defaults = _read_defaults(device, scanner._sources)
 
-    def close_scanner(self, scanner: Scanner) -> None:
+    def _close_scanner_impl(self, scanner: Scanner) -> None:
         device = self._devices.get(scanner.name)
         self._delegates.pop(scanner.name, None)
         if device is not None:
             device.requestCloseSession()
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+    def _scan_pages_impl(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
         device = self._devices.get(scanner.name)
         if device is None:
             raise ScanError("Scanner is not open")

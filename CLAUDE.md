@@ -31,13 +31,13 @@ Scanlib is a multiplatform document scanning library. It provides a unified Pyth
 
 ### Backend selection and thread dispatch
 
-`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. macOS and TWAIN backends are wrapped in thread dispatchers (`_dispatch.py`) because they have thread-affine event loops:
+`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. Each backend handles its own thread safety internally:
 
 - **SANE**: used directly (synchronous ctypes, thread-safe)
-- **macOS**: wrapped in `RunLoopDispatcher` — worker thread spins an NSRunLoop so delegate callbacks arrive on the correct thread
-- **TWAIN**: wrapped in `ThreadDispatcher` — worker thread owns the hidden window handle that TWAIN requires
+- **macOS**: `MacOSBackend` uses a lock and main-thread dispatch — from the main thread, calls run directly; from a background thread, calls are forwarded via `performSelectorOnMainThread:withObject:waitUntilDone:` (ImageCaptureCore delivers callbacks via the main dispatch queue). Background-thread usage assumes the main thread is running a run loop.
+- **TWAIN**: `TwainBackend` owns a dedicated worker thread with a `queue.Queue` — all calls are marshalled to the worker thread which owns the hidden window handle TWAIN requires
 
-The dispatchers marshal all `ScanBackend` protocol calls through a `queue.Queue` to the worker thread. They also patch `scanner._backend_impl` on returned Scanner objects so subsequent calls route through the dispatcher.
+Both macOS and TWAIN backends patch `scanner._backend_impl` on returned Scanner objects so subsequent calls route through the dispatch layer.
 
 ### Scanner lifecycle
 

@@ -4,9 +4,9 @@ A multiplatform document scanning library for Python.
 
 scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends:
 
-- **Windows**: [pytwain](https://pypi.org/project/pytwain/) (TWAIN)
-- **macOS**: [pyobjc-framework-ImageCaptureCore](https://pypi.org/project/pyobjc-framework-ImageCaptureCore/)
-- **Linux**: [python-sane](https://pypi.org/project/python-sane/) (SANE)
+- **Linux**: SANE via ctypes (requires `libsane`)
+- **macOS**: ImageCaptureCore via pyobjc (no extra install needed)
+- **Windows**: TWAIN via pytwain (installed automatically)
 
 ## Installation
 
@@ -14,86 +14,90 @@ scanlib provides a unified API for document scanning across Windows, macOS, and 
 pip install scanlib
 ```
 
-The appropriate platform-specific backend is installed automatically.
-
-## Usage
+## Quick Start
 
 ```python
 import scanlib
-from scanlib import ColorMode, ScanSource, PageSize
 
-# List available scanners
+# Discover scanners
 scanners = scanlib.list_scanners()
-for s in scanners:
-    print(f"{s.name} ({s.vendor} {s.model})")
-    print(f"  Sources: {[src.value for src in s.sources]}")
+print(scanners)  # [Scanner(name='...', backend='sane', closed)]
 
-# Scan a document (uses the first available scanner)
-doc = scanlib.scan()
+# Scan a document
+with scanners[0] as scanner:
+    doc = scanner.scan()
 
-# Save the scanned image (PNG format)
-with open("scan.png", "wb") as f:
+# doc.data contains PDF bytes
+with open("output.pdf", "wb") as f:
     f.write(doc.data)
-
-# Scan with options
-doc = scanlib.scan(dpi=600, color_mode=ColorMode.GRAY)
-
-# Scan from a specific scanner and source
-doc = scanlib.scan(scanner=scanners[0], source=ScanSource.FEEDER)
-
-# Scan with a specific page size (A4, in 1/10 mm)
-doc = scanlib.scan(page_size=PageSize(2100, 2970))
-
-# Available sources are on each ScannerInfo
-print(scanners[0].sources)  # e.g. [ScanSource.FLATBED, ScanSource.FEEDER]
 ```
 
-## API
+## Scan Options
 
-### `scanlib.list_scanners() -> list[ScannerInfo]`
+```python
+from scanlib import ColorMode, PageSize, ScanSource
 
-Returns a list of available scanners on the current platform.
+with scanners[0] as scanner:
+    doc = scanner.scan(
+        dpi=600,
+        color_mode=ColorMode.GRAY,
+        page_size=PageSize(2100, 2970),  # A4 in 1/10 mm
+        source=ScanSource.FLATBED,
+    )
+```
 
-### `scanlib.scan(scanner=None, *, dpi=300, color_mode=ColorMode.COLOR, page_size=None, source=None) -> ScannedDocument`
+## Scanner Capabilities
 
-Scans a document and returns a `ScannedDocument`. If no scanner is specified, the first available scanner is used.
+After opening a scanner you can query its capabilities:
 
-**Parameters:**
-- `scanner` — A `ScannerInfo` object, or `None` to use the first available scanner.
-- `dpi` — Resolution in dots per inch (default: 300).
-- `color_mode` — A `ColorMode` value (default: `ColorMode.COLOR`).
-- `page_size` — A `PageSize` in 1/10 millimeters, or `None` to autodetect.
-- `source` — A `ScanSource` value, or `None` for device default.
+```python
+with scanners[0] as scanner:
+    print(scanner.sources)        # [ScanSource.FLATBED, ScanSource.FEEDER]
+    print(scanner.resolutions)    # [150, 300, 600, 1200]
+    print(scanner.color_modes)    # [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
+    print(scanner.max_page_sizes) # {ScanSource.FLATBED: PageSize(2159, 2972)}
+    print(scanner.defaults)       # ScannerDefaults(dpi=300, ...)
+```
 
-### `ColorMode`
+## Feeder Scanning
 
-Enum with values: `COLOR`, `GRAY`, `BW`.
+When scanning from a document feeder, all pages are scanned automatically:
 
-### `ScanSource`
+```python
+with scanners[0] as scanner:
+    doc = scanner.scan(source=ScanSource.FEEDER)
+    print(doc.page_count)
+```
 
-Enum with values: `FLATBED`, `FEEDER`.
+## Multi-Page Flatbed Scanning
 
-### `PageSize`
+Use the `next_page` callback to scan multiple pages one at a time:
 
-- `width: float` — Width in 1/10 millimeters.
-- `height: float` — Height in 1/10 millimeters.
+```python
+def prompt_next(pages_so_far: int) -> bool:
+    return input(f"{pages_so_far} page(s) scanned. Add another? [y/n] ") == "y"
 
-### `ScannedDocument`
+with scanners[0] as scanner:
+    doc = scanner.scan(next_page=prompt_next)
+    # doc is a single multi-page PDF
+```
 
-- `data: bytes` — Raw PNG image data.
-- `width: int` — Image width in pixels.
-- `height: int` — Image height in pixels.
-- `dpi: int` — Scan resolution.
-- `color_mode: ColorMode` — Color mode used for the scan.
-- `scanner: ScannerInfo` — The scanner that produced this document.
+## Progress Callback
 
-### `ScannerInfo`
+Monitor scan progress. Return `False` to abort:
 
-- `name: str` — Scanner identifier.
-- `vendor: str | None` — Scanner vendor/manufacturer.
-- `model: str | None` — Scanner model name.
-- `backend: str` — Backend used (`"sane"`, `"twain"`, or `"imagecapture"`).
-- `sources: list[ScanSource]` — Available scan sources.
+```python
+def on_progress(percent: int) -> bool:
+    print(f"Scanning... {percent}%")
+    return True  # return False to abort
+
+with scanners[0] as scanner:
+    doc = scanner.scan(progress=on_progress)
+```
+
+## Thread Safety
+
+All scanlib operations can be called from any thread. The library internally dispatches to the correct thread for backends that require it (macOS ImageCaptureCore, Windows TWAIN).
 
 ## License
 
