@@ -80,6 +80,7 @@ class ScanOptions:
     page_size: PageSize | None = None
     source: ScanSource | None = None
     progress: Callable[[int], bool] | None = None
+    next_page: Callable[[int], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -248,11 +249,17 @@ class Scanner:
         page_size: PageSize | None = None,
         source: ScanSource | None = None,
         progress: Callable[[int], bool] | None = None,
+        next_page: Callable[[int], bool] | None = None,
     ) -> ScannedDocument:
         """Scan a document and return PDF bytes.
 
         When *source* is :attr:`ScanSource.FEEDER`, all pages in the
         document feeder are scanned.  Otherwise a single page is scanned.
+
+        When *next_page* is provided and the source is not a feeder,
+        the callback is called after each page with the number of pages
+        scanned so far.  Return ``True`` to scan another page or ``False``
+        to stop.
         """
         if not self._is_open:
             raise ScannerNotOpenError("Scanner must be opened before scanning")
@@ -262,6 +269,7 @@ class Scanner:
             page_size=page_size,
             source=source,
             progress=progress,
+            next_page=next_page,
         )
         pages = self._backend_impl.scan_pages(self, options)
         from ._pdf import png_pages_to_pdf

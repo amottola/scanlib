@@ -330,7 +330,12 @@ class TwainBackend:
                 png_data, width, height = _bmp_to_png(bmp_data)
                 pages.append(ScannedPage(png_data=png_data, width=width, height=height))
 
-                if not is_feeder or not more_pending:
+                if is_feeder:
+                    if not more_pending:
+                        break
+                else:
+                    if options.next_page is not None and options.next_page(len(pages)):
+                        continue
                     break
 
             check_progress(options.progress, 100)

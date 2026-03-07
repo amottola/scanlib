@@ -478,42 +478,52 @@ class MacOSBackend:
 
             check_progress(options.progress, 0)
 
-            # Reset delegate for scan phase
-            scan_delegate._done = False
-            scan_delegate.error = None
-            scan_delegate.completed_pages = []
-            scan_delegate._current_bands = []
+            is_feeder = options.source == ScanSource.FEEDER
+            all_pages: list[ScannedPage] = []
 
-            device.requestScan()
-            try:
-                _run_until(scan_delegate, timeout=120.0, progress=options.progress)
-            except ScanAborted:
-                device.cancelScan()
-                raise
+            while True:
+                # Reset delegate for scan phase
+                scan_delegate._done = False
+                scan_delegate.error = None
+                scan_delegate.completed_pages = []
+                scan_delegate._current_bands = []
 
-            if scan_delegate.error:
-                err_lower = scan_delegate.error.lower()
-                if "cancel" in err_lower or "abort" in err_lower:
-                    raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
-                raise ScanError(f"Scan failed: {scan_delegate.error}")
+                device.requestScan()
+                try:
+                    _run_until(scan_delegate, timeout=120.0, progress=options.progress)
+                except ScanAborted:
+                    device.cancelScan()
+                    raise
 
-            # Flush the last (or only) page
-            if scan_delegate._current_bands:
-                scan_delegate._finish_page()
+                if scan_delegate.error:
+                    err_lower = scan_delegate.error.lower()
+                    if "cancel" in err_lower or "abort" in err_lower:
+                        raise ScanAborted(f"Scan cancelled by device: {scan_delegate.error}")
+                    raise ScanError(f"Scan failed: {scan_delegate.error}")
 
-            if not scan_delegate.completed_pages:
-                raise ScanError("Scan completed but no image data was received")
+                # Flush the last (or only) page
+                if scan_delegate._current_bands:
+                    scan_delegate._finish_page()
 
-            pages: list[ScannedPage] = []
-            for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
-                filtered, width, height, color_type, bit_depth = _assemble_image(
-                    bands, w, h, bpc, nc, pdt
-                )
-                png_data = raw_to_png(filtered, width, height, color_type, bit_depth)
-                pages.append(ScannedPage(png_data=png_data, width=width, height=height))
+                if not scan_delegate.completed_pages:
+                    raise ScanError("Scan completed but no image data was received")
+
+                for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
+                    filtered, width, height, color_type, bit_depth = _assemble_image(
+                        bands, w, h, bpc, nc, pdt
+                    )
+                    png_data = raw_to_png(filtered, width, height, color_type, bit_depth)
+                    all_pages.append(ScannedPage(png_data=png_data, width=width, height=height))
+
+                if is_feeder:
+                    break
+
+                if options.next_page is not None and options.next_page(len(all_pages)):
+                    continue
+                break
 
             check_progress(options.progress, 100)
-            return pages
+            return all_pages
         except (ScanError, ScanAborted):
             raise
         except Exception as exc:

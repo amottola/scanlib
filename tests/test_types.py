@@ -183,6 +183,7 @@ class TestScanOptions:
         assert opts.page_size is None
         assert opts.source is None
         assert opts.progress is None
+        assert opts.next_page is None
 
     def test_custom(self):
         opts = ScanOptions(

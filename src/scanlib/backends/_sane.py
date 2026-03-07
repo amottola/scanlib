@@ -758,6 +758,8 @@ class SaneBackend:
                 pages.append(page)
 
                 if not is_feeder:
+                    if options.next_page is not None and options.next_page(len(pages)):
+                        continue
                     break
 
             if not pages:
