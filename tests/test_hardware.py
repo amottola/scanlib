@@ -4,6 +4,8 @@ All tests in this module are skipped automatically when no physical
 scanner is detected.  Run with ``pytest -m hardware`` to target them.
 """
 
+from __future__ import annotations
+
 import pytest
 
 import scanlib
