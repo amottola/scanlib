@@ -8,52 +8,19 @@ Installation
 
    pip install scanlib
 
-Platform Dependencies
-~~~~~~~~~~~~~~~~~~~~~
+Pre-built wheels are available for all major platforms. When installing from
+source, a C compiler is needed to build the bundled C++ accelerator extension.
 
-scanlib uses conditional dependencies that are installed automatically by pip
-on each platform:
+Platform backends and their Python bindings are installed automatically by pip:
 
-- **Linux**: Uses SANE via ctypes. No Python dependency is needed, but
-  ``libsane`` must be installed at the system level:
+- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes. Requires
+  ``libsane`` (``apt install libsane-dev`` / ``dnf install sane-backends``).
+- **macOS** — ImageCaptureCore via pyobjc.
+- **Windows** — TWAIN via `pytwain <https://github.com/denisenkom/pytwain>`_.
 
-  .. code-block:: bash
-
-     # Debian / Ubuntu
-     sudo apt install libsane-dev
-
-     # Fedora / RHEL
-     sudo dnf install sane-backends
-
-     # Arch
-     sudo pacman -S sane
-
-- **macOS**: Uses ImageCaptureCore via pyobjc. The Python binding
-  (``pyobjc-framework-ImageCaptureCore``) is installed automatically by pip.
-  Requires Xcode Command Line Tools (``xcode-select --install``).
-
-- **Windows**: Uses TWAIN via pytwain. The Python binding (``pytwain``) is
-  installed automatically by pip. Requires a C compiler (MSVC via Visual
-  Studio Build Tools).
-
-A C compiler is required on all platforms to build the bundled C++ accelerator
-extension, which handles JPEG encoding (via `toojpeg <https://create.stephan-brumme.com/toojpeg/>`_)
-and pixel conversion. PDF assembly uses only the Python standard library. No
-external image or PDF processing libraries are required.
-
-**Optional:** Install `libjpeg-turbo <https://libjpeg-turbo.org/>`_ for ~16x
-faster JPEG encoding at high resolutions. It is detected automatically at
-runtime via ctypes:
-
-.. code-block:: bash
-
-   # macOS
-   brew install jpeg-turbo
-
-   # Debian / Ubuntu
-   sudo apt install libturbojpeg0-dev
-
-   # Windows: download from https://libjpeg-turbo.org/
+**Optional:** Install `libjpeg-turbo <https://libjpeg-turbo.org/>`_ for faster
+JPEG encoding (``brew install jpeg-turbo`` / ``apt install libturbojpeg0-dev``).
+It is detected automatically at runtime.
 
 Basic Usage
 -----------

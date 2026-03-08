@@ -16,15 +16,15 @@ pip install scanlib
 
 ### Platform Dependencies
 
-scanlib uses conditional dependencies that are installed automatically by pip on each platform:
+Pre-built wheels are available for all major platforms. Platform backends and their Python bindings are installed automatically by pip:
 
 | Platform | Backend | Python dependency | System requirement |
 |----------|---------|-------------------|--------------------|
-| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`), C compiler |
-| **macOS** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | Xcode Command Line Tools (`xcode-select --install`) |
-| **Windows** | TWAIN (pytwain) | `pytwain` (auto) | C compiler (MSVC via Visual Studio Build Tools) |
+| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`) |
+| **macOS** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
+| **Windows** | TWAIN ([pytwain](https://github.com/denisenkom/pytwain)) | `pytwain` (auto) | *none* |
 
-A C compiler is required on all platforms to build the bundled accelerator extension. On Linux you also need `libsane` at the system level. On macOS and Windows the scanning frameworks are provided by the OS.
+When installing from source, a C compiler is needed to build the bundled C++ accelerator extension.
 
 **Optional:** Install `libjpeg-turbo` for ~16x faster JPEG encoding (`brew install jpeg-turbo` on macOS, `apt install libturbojpeg0-dev` on Linux).
 
