@@ -579,7 +579,7 @@ def _read_defaults(dev: _SaneDevice, opts: list[tuple], sources: list[ScanSource
         return None
 
 
-def _scan_one_page(dev: _SaneDevice) -> ScannedPage:
+def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
     status = dev.start()
     if status != _STATUS_GOOD:
         name = _STATUS_NAMES.get(status, f"unknown ({status})")
@@ -589,11 +589,21 @@ def _scan_one_page(dev: _SaneDevice) -> ScannedPage:
     width = params.pixels_per_line
     depth = params.depth
 
+    expected = params.bytes_per_line * params.lines if params.lines > 0 else 0
+    received = 0
+    last_pct = 0
+
     chunks: list[bytes] = []
     while True:
         data, st = dev.read(65536)
         if data:
             chunks.append(data)
+            if expected > 0:
+                received += len(data)
+                pct = min(received * 99 // expected, 99)
+                if pct > last_pct:
+                    check_progress(progress, pct)
+                    last_pct = pct
         if st == _STATUS_EOF:
             break
         if st != _STATUS_GOOD:
@@ -718,7 +728,7 @@ class SaneBackend:
 
             while True:
                 try:
-                    page = _scan_one_page(dev)
+                    page = _scan_one_page(dev, progress=options.progress)
                 except ScanError as exc:
                     msg = str(exc).lower()
                     if is_feeder and page_count > 0 and (

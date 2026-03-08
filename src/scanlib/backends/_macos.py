@@ -102,6 +102,10 @@ class _ScanDelegate(NSObject):
         self._current_bpc = 0
         self._current_nc = 0
         self._current_pdt = 0
+        self._rows_received = 0
+        self._expected_height = 0
+        self._progress = None
+        self._last_pct = 0
         self.error = None
         self._done = False
         self._session_open = False
@@ -130,16 +134,26 @@ class _ScanDelegate(NSObject):
         start_row = data.dataStartRow()
         if start_row == 0 and self._current_bands:
             self._finish_page()
+            self._rows_received = 0
+            self._last_pct = 0
 
         raw = bytes(data.dataBuffer())
         self._current_bands.append(
             (start_row, data.dataNumRows(), data.bytesPerRow(), raw)
         )
+        self._rows_received += data.dataNumRows()
         self._current_width = data.fullImageWidth()
         self._current_height = data.fullImageHeight()
         self._current_bpc = data.bitsPerComponent()
         self._current_nc = data.numComponents()
         self._current_pdt = data.pixelDataType()
+
+        # Report progress immediately as each band arrives.
+        if self._expected_height > 0 and self._progress is not None:
+            pct = min(self._rows_received * 99 // self._expected_height, 99)
+            if pct > self._last_pct:
+                check_progress(self._progress, pct)
+                self._last_pct = pct
 
     def scannerDevice_didCompleteScanWithError_(self, device, error):
         if error:
@@ -216,13 +230,15 @@ def _assemble_image(
 def _run_until(
     done_flag,
     timeout: float,
-    progress=None,
 ) -> None:
     """Spin the current NSRunLoop until *done_flag._done* is True or *timeout* elapses."""
     run_loop = NSRunLoop.currentRunLoop()
     deadline = NSDate.dateWithTimeIntervalSinceNow_(timeout)
-    while not done_flag._done:
+    # Report indeterminate progress once before waiting for band data.
+    progress = getattr(done_flag, "_progress", None)
+    if progress is not None:
         check_progress(progress, -1)
+    while not done_flag._done:
         if NSDate.date().compare_(deadline) != -1:  # NSOrderedAscending = -1
             break
         run_loop.runMode_beforeDate_(
@@ -625,6 +641,16 @@ class MacOSBackend:
                     phys = fu.physicalSize()
                     fu.setScanArea_(((0, 0), (phys.width, phys.height)))
 
+            # Pre-compute expected pixel height for progress reporting.
+            expected_height = 0
+            if fu is not None:
+                scan_area = fu.scanArea()
+                unit_factor = _measurement_factor(fu.measurementUnit())
+                if unit_factor is None:
+                    unit_factor = MM_PER_INCH * 10
+                area_mm = scan_area.size.height * unit_factor
+                expected_height = int(area_mm / (MM_PER_INCH * 10) * options.dpi)
+
             check_progress(options.progress, 0)
 
             # Spin the run loop briefly so the device can process the
@@ -642,10 +668,14 @@ class MacOSBackend:
                 scan_delegate.error = None
                 scan_delegate.completed_pages = []
                 scan_delegate._current_bands = []
+                scan_delegate._rows_received = 0
+                scan_delegate._last_pct = 0
+                scan_delegate._expected_height = expected_height
+                scan_delegate._progress = options.progress
 
                 device.requestScan()
                 try:
-                    _run_until(scan_delegate, timeout=120.0, progress=options.progress)
+                    _run_until(scan_delegate, timeout=120.0)
                 except ScanAborted:
                     device.cancelScan()
                     raise
