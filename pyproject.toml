@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "A multiplatform document scanning library for Python"
 readme = "README.md"
 license = {text = "MIT"}
+authors = [{name = "Angelo Mottola"}]
 requires-python = ">=3.9"
 dependencies = [
     "pytwain; sys_platform == 'win32'",

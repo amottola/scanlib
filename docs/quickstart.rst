@@ -30,16 +30,30 @@ on each platform:
 
 - **macOS**: Uses ImageCaptureCore via pyobjc. The Python binding
   (``pyobjc-framework-ImageCaptureCore``) is installed automatically by pip.
-  No system-level install is needed — the scanning framework is built into
-  macOS.
+  Requires Xcode Command Line Tools (``xcode-select --install``).
 
 - **Windows**: Uses TWAIN via pytwain. The Python binding (``pytwain``) is
-  installed automatically by pip. No system-level install is needed — the
-  TWAIN interface is built into Windows.
+  installed automatically by pip. Requires a C compiler (MSVC via Visual
+  Studio Build Tools).
 
-scanlib was designed with minimal dependencies as a core goal. It uses no
-external image or PDF processing libraries; all image conversion and PDF
-generation is implemented in pure Python using only the standard library.
+A C compiler is required on all platforms to build the bundled C++ accelerator
+extension, which handles JPEG encoding (via `toojpeg <https://create.stephan-brumme.com/toojpeg/>`_)
+and pixel conversion. PDF assembly uses only the Python standard library. No
+external image or PDF processing libraries are required.
+
+**Optional:** Install `libjpeg-turbo <https://libjpeg-turbo.org/>`_ for ~16x
+faster JPEG encoding at high resolutions. It is detected automatically at
+runtime via ctypes:
+
+.. code-block:: bash
+
+   # macOS
+   brew install jpeg-turbo
+
+   # Debian / Ubuntu
+   sudo apt install libturbojpeg0-dev
+
+   # Windows: download from https://libjpeg-turbo.org/
 
 Basic Usage
 -----------

@@ -119,7 +119,7 @@ Full documentation is available at [python-scanlib.readthedocs.io](https://pytho
 
 ## About
 
-This project was built with the help of [Claude Code](https://claude.ai/code).
+Created by Angelo Mottola, with the help of [Claude Code](https://claude.ai/code).
 
 ## License
 
