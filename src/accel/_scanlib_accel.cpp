@@ -333,18 +333,22 @@ static PyMethodDef methods[] = {
     {nullptr, nullptr, 0, nullptr}
 };
 
+static PyModuleDef_Slot module_slots[] = {
+#ifdef Py_GIL_DISABLED
+    {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+#endif
+    {0, nullptr}
+};
+
 static struct PyModuleDef module = {
     PyModuleDef_HEAD_INIT,
     "_scanlib_accel",
     "Accelerated helpers for scanlib (JPEG encoding, pixel conversion).",
-    -1,
-    methods
+    0,
+    methods,
+    module_slots,
 };
 
 PyMODINIT_FUNC PyInit__scanlib_accel(void) {
-    PyObject *m = PyModule_Create(&module);
-#ifdef Py_GIL_DISABLED
-    PyUnstable_Module_SetGIL(m, Py_MOD_GIL_NOT_USED);
-#endif
-    return m;
+    return PyModuleDef_Init(&module);
 }
