@@ -24,7 +24,8 @@ Platform backends and their Python bindings are installed automatically by pip:
 | **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
 | **Windows 7+** | TWAIN ([pytwain](https://github.com/denisenkom/pytwain)) | `pytwain` (auto) | *none* |
 
-**Optional:** Install [libjpeg-turbo](https://libjpeg-turbo.org/) for ~16x faster JPEG encoding (`brew install jpeg-turbo` on macOS, `apt install libturbojpeg0-dev` on Linux).
+On macOS, JPEG encoding uses the built-in ImageIO framework automatically.
+On Linux and Windows, install [libjpeg-turbo](https://libjpeg-turbo.org/) for faster JPEG encoding (`apt install libturbojpeg0-dev` on Linux).
 
 ## Quick Start
 

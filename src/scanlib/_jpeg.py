@@ -1,8 +1,8 @@
-"""JPEG encoding with optional libjpeg-turbo acceleration.
+"""JPEG encoding with platform-optimized acceleration.
 
-When libturbojpeg is available on the system, JPEG encoding uses its
-SIMD-optimized path (~16x faster than the bundled toojpeg encoder).
-Otherwise, falls back to the vendored toojpeg via _scanlib_accel.
+On macOS, encoding uses the built-in ImageIO framework (always available).
+On other platforms, libjpeg-turbo is used when installed, otherwise falls
+back to the bundled toojpeg encoder via _scanlib_accel.
 """
 
 from __future__ import annotations
@@ -13,6 +13,165 @@ import os
 import sys
 
 from _scanlib_accel import encode_jpeg as _toojpeg_encode
+
+# ------------------------------------------------------------------ #
+# macOS ImageIO encoder (ctypes)                                      #
+# ------------------------------------------------------------------ #
+
+_has_imageio = False
+
+if sys.platform == "darwin":
+    try:
+        _cg = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+        )
+        _cf = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+        _io = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ImageIO.framework/ImageIO"
+        )
+
+        _CFIndex = ctypes.c_long
+
+        _cf.CFDataCreateMutable.restype = ctypes.c_void_p
+        _cf.CFDataCreateMutable.argtypes = [ctypes.c_void_p, _CFIndex]
+        _cf.CFDataGetBytePtr.restype = ctypes.c_void_p
+        _cf.CFDataGetBytePtr.argtypes = [ctypes.c_void_p]
+        _cf.CFDataGetLength.restype = _CFIndex
+        _cf.CFDataGetLength.argtypes = [ctypes.c_void_p]
+        _cf.CFRelease.argtypes = [ctypes.c_void_p]
+        _cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        _cf.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32,
+        ]
+        _cf.CFDictionaryCreate.restype = ctypes.c_void_p
+        _cf.CFDictionaryCreate.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_void_p),
+            _CFIndex,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        _cf.CFNumberCreate.restype = ctypes.c_void_p
+        _cf.CFNumberCreate.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+        ]
+
+        _cg.CGColorSpaceCreateWithName.restype = ctypes.c_void_p
+        _cg.CGColorSpaceCreateWithName.argtypes = [ctypes.c_void_p]
+        _cg.CGDataProviderCreateWithData.restype = ctypes.c_void_p
+        _cg.CGDataProviderCreateWithData.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+        ]
+        _cg.CGImageCreate.restype = ctypes.c_void_p
+        _cg.CGImageCreate.argtypes = [
+            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
+            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p,
+            ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_bool, ctypes.c_int,
+        ]
+        _cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+        _cg.CGColorSpaceRelease.argtypes = [ctypes.c_void_p]
+        _cg.CGDataProviderRelease.argtypes = [ctypes.c_void_p]
+
+        _io.CGImageDestinationCreateWithData.restype = ctypes.c_void_p
+        _io.CGImageDestinationCreateWithData.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+        ]
+        _io.CGImageDestinationAddImage.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ]
+        _io.CGImageDestinationFinalize.restype = ctypes.c_bool
+        _io.CGImageDestinationFinalize.argtypes = [ctypes.c_void_p]
+
+        _kCGColorSpaceGenericGray = ctypes.c_void_p.in_dll(
+            _cg, "kCGColorSpaceGenericGray"
+        )
+        _kCGColorSpaceSRGB = ctypes.c_void_p.in_dll(_cg, "kCGColorSpaceSRGB")
+
+        _kCFStringEncodingUTF8 = 0x08000100
+        _kCFNumberDoubleType = 13
+        _kCGImageAlphaNone = 0
+
+        _jpeg_type_str = _cf.CFStringCreateWithCString(
+            None, b"public.jpeg", _kCFStringEncodingUTF8,
+        )
+        _quality_key_str = _cf.CFStringCreateWithCString(
+            None, b"kCGImageDestinationLossyCompressionQuality",
+            _kCFStringEncodingUTF8,
+        )
+
+        _has_imageio = True
+    except (OSError, AttributeError, ValueError):
+        _has_imageio = False
+
+
+def _imageio_encode(
+    pixels: bytes, width: int, height: int, color_type: int, quality: int,
+) -> bytes:
+    """Encode using macOS ImageIO framework via ctypes."""
+    if color_type == 0:
+        components = 1
+        cs_name = _kCGColorSpaceGenericGray
+    elif color_type == 2:
+        components = 3
+        cs_name = _kCGColorSpaceSRGB
+    else:
+        raise ValueError(f"color_type must be 0 or 2, got {color_type}")
+
+    bytes_per_row = width * components
+    bits_per_pixel = 8 * components
+
+    color_space = _cg.CGColorSpaceCreateWithName(cs_name)
+    provider = _cg.CGDataProviderCreateWithData(
+        None, pixels, len(pixels), None,
+    )
+    image = _cg.CGImageCreate(
+        width, height, 8, bits_per_pixel, bytes_per_row,
+        color_space, _kCGImageAlphaNone, provider, None, False, 0,
+    )
+
+    data = _cf.CFDataCreateMutable(None, 0)
+    dest = _io.CGImageDestinationCreateWithData(
+        data, _jpeg_type_str, 1, None,
+    )
+
+    # Build options dict with compression quality.
+    q = ctypes.c_double(quality / 100.0)
+    q_num = _cf.CFNumberCreate(None, _kCFNumberDoubleType, ctypes.byref(q))
+    keys = (ctypes.c_void_p * 1)(_quality_key_str)
+    values = (ctypes.c_void_p * 1)(q_num)
+    options = _cf.CFDictionaryCreate(None, keys, values, 1, None, None)
+
+    _io.CGImageDestinationAddImage(dest, image, options)
+    ok = _io.CGImageDestinationFinalize(dest)
+
+    if ok:
+        length = _cf.CFDataGetLength(data)
+        ptr = _cf.CFDataGetBytePtr(data)
+        result = ctypes.string_at(ptr, length)
+    else:
+        result = None
+
+    # Cleanup CF/CG objects.
+    _cf.CFRelease(options)
+    _cf.CFRelease(q_num)
+    _cf.CFRelease(dest)
+    _cf.CFRelease(data)
+    _cg.CGImageRelease(image)
+    _cg.CGDataProviderRelease(provider)
+    _cg.CGColorSpaceRelease(color_space)
+
+    if result is None:
+        raise RuntimeError("ImageIO JPEG encoding failed")
+    return result
+
+
+# ------------------------------------------------------------------ #
+# libjpeg-turbo encoder (Linux / Windows)                            #
+# ------------------------------------------------------------------ #
 
 # TurboJPEG constants
 _TJPF_RGB = 0
@@ -34,13 +193,7 @@ def _find_turbojpeg() -> ctypes.CDLL | None:
     if path:
         candidates.append(path)
 
-    if sys.platform == "darwin":
-        # Homebrew (Apple Silicon and Intel)
-        for prefix in ("/opt/homebrew/lib", "/usr/local/lib"):
-            p = os.path.join(prefix, "libturbojpeg.dylib")
-            if os.path.exists(p):
-                candidates.append(p)
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         # Common Windows install locations
         for prog in (os.environ.get("ProgramFiles", ""), os.environ.get("ProgramFiles(x86)", "")):
             if prog:
@@ -78,8 +231,10 @@ def _find_turbojpeg() -> ctypes.CDLL | None:
 
 
 def _init_turbo() -> None:
-    """Initialize TurboJPEG at module load time."""
+    """Initialize TurboJPEG at module load time (non-macOS only)."""
     global _tj_lib, _tj_handle
+    if _has_imageio:
+        return
     _tj_lib = _find_turbojpeg()
     if _tj_lib is not None:
         _tj_handle = _tj_lib.tjInitCompress()
@@ -124,17 +279,27 @@ def _turbo_encode(
     return result
 
 
+# ------------------------------------------------------------------ #
+# Public API                                                          #
+# ------------------------------------------------------------------ #
+
 def encode_jpeg(
     pixels: bytes, width: int, height: int, color_type: int, quality: int,
 ) -> bytes:
     """Encode raw pixels as baseline JPEG.
 
-    Uses libjpeg-turbo if available, otherwise falls back to toojpeg.
+    Uses ImageIO on macOS, libjpeg-turbo on other platforms if available,
+    otherwise falls back to the bundled toojpeg encoder.
     """
+    if _has_imageio:
+        return _imageio_encode(pixels, width, height, color_type, quality)
     if _tj_handle is not None:
         return _turbo_encode(pixels, width, height, color_type, quality)
     return _toojpeg_encode(pixels, width, height, color_type, quality)
 
 
-#: Whether the fast TurboJPEG backend is active.
+#: Whether ImageIO (macOS) is used for JPEG encoding.
+has_imageio: bool = _has_imageio
+
+#: Whether libjpeg-turbo is used for JPEG encoding (non-macOS).
 has_turbo: bool = _tj_handle is not None
