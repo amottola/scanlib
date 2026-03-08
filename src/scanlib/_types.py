@@ -331,3 +331,14 @@ class ScanBackend(Protocol):
     def close_scanner(self, scanner: Scanner) -> None: ...
 
     def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]: ...
+
+
+# --- Utilities ---
+
+MM_PER_INCH = 25.4
+
+
+def check_progress(progress: Callable[[int], bool] | None, percent: int) -> None:
+    """Call the progress callback; raise ScanAborted if it returns False."""
+    if progress is not None and progress(percent) is False:
+        raise ScanAborted("Scan aborted")

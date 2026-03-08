@@ -2,7 +2,7 @@
 
 A multiplatform document scanning library for Python.
 
-scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries; all image conversion and PDF generation is implemented in pure Python using only the standard library.
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding and pixel conversion are handled by a bundled C extension (using the public-domain [stb_image_write](https://github.com/nothings/stb) library), while PDF assembly uses only the standard library.
 
 ## Installation
 
@@ -16,11 +16,11 @@ scanlib uses conditional dependencies that are installed automatically by pip on
 
 | Platform | Backend | Python dependency | System requirement |
 |----------|---------|-------------------|--------------------|
-| **Linux** | SANE (ctypes) | *none* | `libsane` — install via your package manager (e.g. `apt install libsane-dev`, `dnf install sane-backends`) |
-| **macOS** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (installed automatically) | *none* — uses the built-in macOS framework |
-| **Windows** | TWAIN (pytwain) | `pytwain` (installed automatically) | *none* — uses the TWAIN interface built into Windows |
+| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`), C compiler |
+| **macOS** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | Xcode Command Line Tools (`xcode-select --install`) |
+| **Windows** | TWAIN (pytwain) | `pytwain` (auto) | C compiler (MSVC via Visual Studio Build Tools) |
 
-On Linux, the only external requirement is having `libsane` installed at the system level. On macOS and Windows, `pip install scanlib` is all you need — the required Python bindings are pulled in automatically and the scanning frameworks are provided by the OS.
+A C compiler is required on all platforms to build the bundled accelerator extension. On Linux you also need `libsane` at the system level. On macOS and Windows the scanning frameworks are provided by the OS.
 
 ## Quick Start
 

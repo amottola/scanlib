@@ -4,7 +4,7 @@ import pytest
 
 from scanlib._pdf import pages_to_pdf
 from scanlib._types import ColorMode, ImageFormat, ScannedPage
-from scanlib.backends._util import gray_to_bw, rgb_to_gray
+from _scanlib_accel import gray_to_bw, rgb_to_gray
 
 
 def _make_raw(width, height, color_type=2, bit_depth=8):
@@ -127,7 +127,7 @@ class TestPagesToPdfJpeg:
             iter([page]), dpi=300, image_format=ImageFormat.JPEG,
         )
         assert b"/Filter /DCTDecode" in pdf
-        assert b"/DeviceGray" in pdf
+        assert b"/DeviceRGB" in pdf  # stb always produces 3-component JPEG
 
     def test_jpeg_produces_valid_dctdecode(self):
         """JPEG encoding produces a valid PDF with DCTDecode filter."""
@@ -151,14 +151,14 @@ class TestPagesToPdfJpeg:
         )
         assert len(pdf_low) < len(pdf_high)
 
-    def test_bw_mode_uses_grayscale_jpeg(self):
-        """BW mode with JPEG uses 8-bit grayscale (JPEG can't do 1-bit)."""
+    def test_bw_mode_uses_jpeg(self):
+        """BW mode with JPEG uses grayscale input but 3-component JPEG output."""
         page = _make_raw(16, 16, color_type=2)
         pdf, *_ = pages_to_pdf(
             iter([page]), dpi=300, color_mode=ColorMode.BW,
             image_format=ImageFormat.JPEG,
         )
-        assert b"/DeviceGray" in pdf
+        assert b"/DeviceRGB" in pdf  # stb always produces 3-component JPEG
         assert b"/BitsPerComponent 8" in pdf
         assert b"/Filter /DCTDecode" in pdf
 

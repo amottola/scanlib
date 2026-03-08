@@ -11,6 +11,7 @@ from collections.abc import Iterator
 import twain
 
 from .._types import (
+    MM_PER_INCH,
     ColorMode,
     PageSize,
     ScanAborted,
@@ -20,8 +21,8 @@ from .._types import (
     ScannerDefaults,
     ScanOptions,
     ScanSource,
+    check_progress,
 )
-from ._util import MM_PER_INCH, check_progress
 
 _COLOR_MODE_MAP = {
     ColorMode.COLOR: "color",

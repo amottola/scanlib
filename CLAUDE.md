@@ -21,13 +21,24 @@ pytest tests/test_hardware.py -v
 pip install -e ".[docs]"
 cd docs && make html
 
-# Install for development
+# Install for development (builds C extension)
 pip install -e ".[dev]"
 ```
 
 ## Architecture
 
 Scanlib is a multiplatform document scanning library. It provides a unified Python API across three platform-native backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), and TWAIN (Windows, pytwain).
+
+### C accelerator extension (`_scanlib_accel`)
+
+A required CPython C extension provides the performance-critical functions:
+
+- **`encode_jpeg`** — JPEG encoding via vendored `stb_image_write.h` (public domain). Always produces 3-component YCbCr output, even for grayscale input.
+- **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
+- **`gray_to_bw`** — grayscale to 1-bit packed conversion (threshold at 128)
+- **`trim_rows`** — removes row padding from raw scan data
+
+The extension is built from `src/_scanlib_accel.c` which includes `src/stb_image_write.h`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
 
 ### Backend selection and thread dispatch
 
@@ -43,14 +54,14 @@ Both macOS and TWAIN backends patch `scanner._backend_impl` on returned Scanner 
 
 1. `list_scanners()` returns lightweight `Scanner` objects (no device session)
 2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources`, `resolutions`, `color_modes`, `max_page_sizes`, `defaults`
-3. `scanner.scan(...)` calls the backend's `scan_pages()` which returns `list[ScannedPage]` (PNG data), then `_pdf.py` converts them into a single PDF
+3. `scanner.scan(...)` calls the backend's `scan_pages()` which yields `ScannedPage` objects (raw pixels), then `_pdf.py` converts them into a single PDF
 4. `scanner.close()` releases the session
 
 Properties like `sources`, `resolutions`, `color_modes` raise `ScannerNotOpenError` if accessed before `open()`.
 
 ### Pages to PDF pipeline
 
-Backends produce `ScannedPage` objects containing raw PNG bytes. `_pdf.py` parses these PNGs (implements all 5 PNG row filters), applies color mode conversion if needed (using `rgb_to_gray`/`gray_to_bw` from `_util.py`), and writes a minimal PDF 1.4 file. No external image or PDF libraries are used.
+Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper). `_pdf.py` consumes this iterator one page at a time, applies color mode conversion if needed (using `rgb_to_gray`/`gray_to_bw` from `_scanlib_accel`), encodes each page as JPEG (via `encode_jpeg` from `_scanlib_accel`) or PNG (zlib), and writes a minimal PDF 1.4 file. The streaming design means only one page's raw pixels live in memory at a time.
 
 ### Multi-page scanning
 
@@ -59,7 +70,7 @@ Backends produce `ScannedPage` objects containing raw PNG bytes. `_pdf.py` parse
 
 ### macOS memory-based transfer
 
-The macOS backend uses `ICScannerTransferModeMemoryBased` with `scannerDevice:didScanToBandData:` delegate callbacks. Band data is accumulated per-page in `_ScanDelegate`, then stitched into complete images by `_assemble_image()` which produces PNG-filter-prefixed data for `raw_to_png()`.
+The macOS backend uses `ICScannerTransferModeMemoryBased` with `scannerDevice:didScanToBandData:` delegate callbacks. Band data is accumulated per-page in `_ScanDelegate`, then stitched into complete raw images by `_assemble_image()`.
 
 Key implementation details:
 - **Bit depth must be set** on the functional unit before scanning — the backend queries `supportedBitDepths` (an `NSIndexSet`) and picks 1-bit for BW or 8-bit for gray/color. Without setting bit depth the scanner may complete instantly with no data
@@ -74,4 +85,5 @@ Key implementation details:
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- The codebase uses no external image/PDF processing libraries; all conversion is pure stdlib (struct, zlib)
+- JPEG encoding and pixel conversion are in the C extension `_scanlib_accel`; PDF assembly and the PNG path use stdlib (`zlib`)
+- `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, and shared utilities (`check_progress`, `MM_PER_INCH`)

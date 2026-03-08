@@ -14,6 +14,7 @@ from Foundation import (
 )
 
 from .._types import (
+    MM_PER_INCH,
     ColorMode,
     PageSize,
     ScanAborted,
@@ -23,8 +24,8 @@ from .._types import (
     ScannerDefaults,
     ScanOptions,
     ScanSource,
+    check_progress,
 )
-from ._util import MM_PER_INCH, check_progress
 
 _ICC_SOURCE_MAP = {
     ImageCaptureCore.ICScannerFunctionalUnitTypeFlatbed: ScanSource.FLATBED,

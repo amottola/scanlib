@@ -9,6 +9,8 @@ from collections import namedtuple
 from collections.abc import Iterator
 from typing import Any
 
+from _scanlib_accel import trim_rows
+
 from .._types import (
     ColorMode,
     PageSize,
@@ -19,8 +21,8 @@ from .._types import (
     ScannerDefaults,
     ScanOptions,
     ScanSource,
+    check_progress,
 )
-from ._util import check_progress, trim_rows
 
 # ---------------------------------------------------------------------------
 # Load libsane

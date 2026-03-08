@@ -6,6 +6,11 @@ __pycache__/
 dist/
 build/
 
+# C extensions
+*.so
+*.pyd
+*.dylib
+
 # Testing
 .pytest_cache/
 
