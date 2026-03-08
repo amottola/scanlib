@@ -8,25 +8,23 @@ A multiplatform document scanning library for Python.
 
 scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding and pixel conversion are handled by a bundled C extension (using the [toojpeg](https://create.stephan-brumme.com/toojpeg/) library), while PDF assembly uses only the standard library. When [libjpeg-turbo](https://libjpeg-turbo.org/) is installed on the system, JPEG encoding is automatically accelerated via its SIMD-optimized path.
 
-## Installation
+## Requirements & Installation
 
 ```bash
 pip install scanlib
 ```
 
-### Platform Dependencies
+**Python 3.9** or later is required. Pre-built wheels are available for all major platforms. When installing from source, a C++11 compiler is needed to build the bundled accelerator extension.
 
-Pre-built wheels are available for all major platforms. Platform backends and their Python bindings are installed automatically by pip:
+Platform backends and their Python bindings are installed automatically by pip:
 
 | Platform | Backend | Python dependency | System requirement |
 |----------|---------|-------------------|--------------------|
 | **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`) |
-| **macOS** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
-| **Windows** | TWAIN ([pytwain](https://github.com/denisenkom/pytwain)) | `pytwain` (auto) | *none* |
+| **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
+| **Windows 7+** | TWAIN ([pytwain](https://github.com/denisenkom/pytwain)) | `pytwain` (auto) | *none* |
 
-When installing from source, a C compiler is needed to build the bundled C++ accelerator extension.
-
-**Optional:** Install `libjpeg-turbo` for ~16x faster JPEG encoding (`brew install jpeg-turbo` on macOS, `apt install libturbojpeg0-dev` on Linux).
+**Optional:** Install [libjpeg-turbo](https://libjpeg-turbo.org/) for ~16x faster JPEG encoding (`brew install jpeg-turbo` on macOS, `apt install libturbojpeg0-dev` on Linux).
 
 ## Quick Start
 

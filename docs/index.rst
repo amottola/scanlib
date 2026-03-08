@@ -9,22 +9,23 @@ as PDF files and handles platform differences transparently. JPEG encoding
 and pixel conversion are handled by a bundled C++ extension, with optional
 `libjpeg-turbo <https://libjpeg-turbo.org/>`_ acceleration for high-resolution scans.
 
-Installation
-------------
+Requirements & Installation
+--------------------------
 
 .. code-block:: bash
 
    pip install scanlib
 
-Pre-built wheels are available for all major platforms. When installing from
-source, a C compiler is needed to build the bundled C++ accelerator extension.
+**Python 3.9** or later is required. Pre-built wheels are available for all
+major platforms. When installing from source, a C++11 compiler is needed to
+build the bundled accelerator extension.
 
 Platform backends and their Python bindings are installed automatically by pip:
 
-- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes. Requires
-  ``libsane`` (``apt install libsane-dev`` / ``dnf install sane-backends``).
-- **macOS** — ImageCaptureCore via pyobjc.
-- **Windows** — TWAIN via `pytwain <https://github.com/denisenkom/pytwain>`_.
+- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes.
+  Requires ``libsane`` (``apt install libsane-dev`` / ``dnf install sane-backends``).
+- **macOS 10.7+** — ImageCaptureCore via pyobjc.
+- **Windows 7+** — TWAIN via `pytwain <https://github.com/denisenkom/pytwain>`_.
 
 **Optional:** Install `libjpeg-turbo <https://libjpeg-turbo.org/>`_ for faster
 JPEG encoding (``brew install jpeg-turbo`` / ``apt install libturbojpeg0-dev``).
