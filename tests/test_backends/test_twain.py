@@ -19,7 +19,7 @@ def mock_twain_module():
         yield mock_twain
 
 
-class TestBmpToPng:
+class TestBmpToRaw:
     def _make_bmp(self, width, height, bpp=24):
         """Create a minimal valid BMP file."""
         import struct
@@ -52,45 +52,48 @@ class TestBmpToPng:
         return bmp
 
     def test_converts_24bit_bmp(self):
-        from scanlib.backends._twain import _bmp_to_png
+        from scanlib.backends._twain import _bmp_to_raw
 
         bmp = self._make_bmp(4, 3, 24)
-        png_data, w, h = _bmp_to_png(bmp)
+        raw_data, w, h, ct, bd = _bmp_to_raw(bmp)
 
-        assert png_data[:8] == b"\x89PNG\r\n\x1a\n"
         assert w == 4
         assert h == 3
+        assert ct == 2  # RGB
+        assert bd == 8
+        assert len(raw_data) == 4 * 3 * 3
 
     def test_converts_32bit_bmp(self):
-        from scanlib.backends._twain import _bmp_to_png
+        from scanlib.backends._twain import _bmp_to_raw
 
         bmp = self._make_bmp(2, 2, 32)
-        png_data, w, h = _bmp_to_png(bmp)
+        raw_data, w, h, ct, bd = _bmp_to_raw(bmp)
 
-        assert png_data[:8] == b"\x89PNG\r\n\x1a\n"
         assert w == 2
         assert h == 2
+        assert ct == 6  # RGBA
+        assert bd == 8
 
     def test_converts_8bit_bmp(self):
-        from scanlib.backends._twain import _bmp_to_png
+        from scanlib.backends._twain import _bmp_to_raw
 
         bmp = self._make_bmp(4, 2, 8)
-        png_data, w, h = _bmp_to_png(bmp)
+        raw_data, w, h, ct, bd = _bmp_to_raw(bmp)
 
-        assert png_data[:8] == b"\x89PNG\r\n\x1a\n"
         assert w == 4
         assert h == 2
+        assert ct == 0  # grayscale
+        assert bd == 8
 
     def test_converts_1bit_bmp(self):
-        from scanlib.backends._twain import _bmp_to_png
+        from scanlib.backends._twain import _bmp_to_raw
         import struct as st
 
         width, height = 8, 2
-        # 1-bit BMP: palette + bit-packed rows
         header_size = 14 + 40
-        palette_size = 2 * 4  # 2 colors, 4 bytes each (BGRA)
+        palette_size = 2 * 4
         data_offset = header_size + palette_size
-        bmp_row_size = 4  # 8 pixels = 1 byte, padded to 4
+        bmp_row_size = 4
         pixel_data_size = bmp_row_size * height
         file_size = data_offset + pixel_data_size
 
@@ -98,34 +101,31 @@ class TestBmpToPng:
         bmp += st.pack("<I", file_size)
         bmp += b"\x00\x00\x00\x00"
         bmp += st.pack("<I", data_offset)
-        # DIB header
         bmp += st.pack("<I", 40)
         bmp += st.pack("<i", width)
-        bmp += st.pack("<i", height)  # bottom-up
-        bmp += st.pack("<HH", 1, 1)  # planes, bpp
-        bmp += st.pack("<I", 0)  # compression
+        bmp += st.pack("<i", height)
+        bmp += st.pack("<HH", 1, 1)
+        bmp += st.pack("<I", 0)
         bmp += st.pack("<I", pixel_data_size)
         bmp += st.pack("<ii", 2835, 2835)
-        bmp += st.pack("<II", 2, 0)  # colors used, important
-        # Palette: entry 0 = black (B,G,R,A), entry 1 = white
-        bmp += bytes([0, 0, 0, 0])      # black
-        bmp += bytes([255, 255, 255, 0]) # white
-        # Row 0 (bottom): all zeros
+        bmp += st.pack("<II", 2, 0)
+        bmp += bytes([0, 0, 0, 0])
+        bmp += bytes([255, 255, 255, 0])
         bmp += bytes([0x00]) + bytes(3)
-        # Row 1 (top): alternating
         bmp += bytes([0xAA]) + bytes(3)
 
-        png_data, w, h = _bmp_to_png(bmp)
+        raw_data, w, h, ct, bd = _bmp_to_raw(bmp)
 
-        assert png_data[:8] == b"\x89PNG\r\n\x1a\n"
         assert w == 8
         assert h == 2
+        assert ct == 0  # grayscale
+        assert bd == 1
 
     def test_invalid_bmp_raises(self):
-        from scanlib.backends._twain import _bmp_to_png
+        from scanlib.backends._twain import _bmp_to_raw
 
         with pytest.raises(ScanError, match="Invalid BMP"):
-            _bmp_to_png(b"not a bmp")
+            _bmp_to_raw(b"not a bmp")
 
 
 class TestTwainBackend:
@@ -205,4 +205,4 @@ class TestTwainBackend:
         scanners = backend.list_scanners()
 
         with pytest.raises(ScanError, match="not open"):
-            backend.scan_pages(scanners[0], ScanOptions())
+            list(backend.scan_pages(scanners[0], ScanOptions()))

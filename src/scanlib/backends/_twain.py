@@ -6,6 +6,7 @@ import math
 import queue
 import struct
 import threading
+from collections.abc import Iterator
 
 import twain
 
@@ -20,7 +21,7 @@ from .._types import (
     ScanOptions,
     ScanSource,
 )
-from ._util import MM_PER_INCH, check_progress, raw_to_png
+from ._util import MM_PER_INCH, check_progress
 
 _COLOR_MODE_MAP = {
     ColorMode.COLOR: "color",
@@ -29,10 +30,10 @@ _COLOR_MODE_MAP = {
 }
 
 
-def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
-    """Convert BMP file bytes to PNG file bytes using only stdlib.
+def _bmp_to_raw(bmp_data: bytes) -> tuple[bytes, int, int, int, int]:
+    """Convert BMP file bytes to raw pixel data.
 
-    Returns ``(png_bytes, width, height)``.
+    Returns ``(raw_data, width, height, color_type, bit_depth)``.
     """
     if bmp_data[:2] != b"BM":
         raise ScanError("Invalid BMP data")
@@ -52,19 +53,19 @@ def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
     if bits_per_pixel == 24:
         color_type = 2  # RGB
         channels = 3
-        png_bit_depth = 8
+        bit_depth = 8
     elif bits_per_pixel == 32:
         color_type = 6  # RGBA
         channels = 4
-        png_bit_depth = 8
+        bit_depth = 8
     elif bits_per_pixel == 8:
         color_type = 0  # Grayscale
         channels = 1
-        png_bit_depth = 8
+        bit_depth = 8
     elif bits_per_pixel == 1:
         color_type = 0  # Grayscale 1-bit
         channels = 0  # special handling below
-        png_bit_depth = 1
+        bit_depth = 1
     else:
         raise ScanError(f"Unsupported BMP bit depth: {bits_per_pixel}")
 
@@ -95,7 +96,7 @@ def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
             remainder = width % 8
             if remainder:
                 row[-1] &= (0xFF << (8 - remainder)) & 0xFF
-            raw_rows.append(b"\x00" + bytes(row))
+            raw_rows.append(bytes(row))
 
         raw_data = b"".join(raw_rows)
     else:
@@ -118,12 +119,11 @@ def _bmp_to_png(bmp_data: bytes) -> tuple[bytes, int, int]:
                     row_array[i], row_array[i + 2] = row_array[i + 2], row_array[i]
                 row = bytes(row_array)
 
-            raw_rows.append(b"\x00" + row)
+            raw_rows.append(row)
 
         raw_data = b"".join(raw_rows)
 
-    png = raw_to_png(raw_data, width, height, color_type, png_bit_depth)
-    return png, width, height
+    return raw_data, width, height, color_type, bit_depth
 
 
 _WNDPROC = ctypes.WINFUNCTYPE(
@@ -259,8 +259,9 @@ class TwainBackend:
     def close_scanner(self, scanner: Scanner) -> None:
         return self._dispatch(self._close_scanner_impl, scanner)
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
-        return self._dispatch(self._scan_pages_impl, scanner, options)
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]:
+        pages = self._dispatch(self._scan_pages_impl, scanner, options)
+        yield from pages
 
     def _get_source_manager(self) -> twain.SourceManager:
         hwnd = _create_hidden_window()
@@ -371,8 +372,8 @@ class TwainBackend:
                     raise
 
                 bmp_data = twain.dib_to_bm_file(native_handle)
-                png_data, width, height = _bmp_to_png(bmp_data)
-                pages.append(ScannedPage(png_data=png_data, width=width, height=height))
+                raw, w, h, ct, bd = _bmp_to_raw(bmp_data)
+                pages.append(ScannedPage(data=raw, width=w, height=h, color_type=ct, bit_depth=bd))
 
                 if is_feeder:
                     if not more_pending:

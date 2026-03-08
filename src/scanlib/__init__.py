@@ -7,6 +7,7 @@ import sys
 from ._types import (
     BackendNotAvailableError,
     ColorMode,
+    ImageFormat,
     NoScannerFoundError,
     PageSize,
     ScanAborted,
@@ -24,6 +25,7 @@ from ._types import (
 __all__ = [
     "list_scanners",
     "ColorMode",
+    "ImageFormat",
     "PageSize",
     "Scanner",
     "ScannerDefaults",

@@ -1,159 +1,31 @@
-"""Minimal stdlib-only PDF writer for embedding PNG pages."""
+"""Minimal stdlib-only PDF writer for embedding scanned pages."""
 
 from __future__ import annotations
 
-import struct
 import zlib
+from collections.abc import Iterator
 
-from ._types import ColorMode
+from ._jpeg import encode_jpeg
+from ._types import ColorMode, ImageFormat, ScannedPage
 from .backends._util import gray_to_bw, rgb_to_gray
 
 
-def _parse_png(data: bytes) -> tuple[int, int, int, int, bytes]:
-    """Parse a PNG file and return (width, height, bit_depth, color_type, raw_pixels).
-
-    Decompresses the IDAT stream and reconstructs unfiltered pixel data.
-    """
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("Invalid PNG data")
-
-    pos = 8
-    width = height = bit_depth = color_type = 0
-    idat_chunks: list[bytes] = []
-
-    while pos < len(data):
-        chunk_len = struct.unpack(">I", data[pos : pos + 4])[0]
-        chunk_type = data[pos + 4 : pos + 8]
-        chunk_data = data[pos + 8 : pos + 8 + chunk_len]
-        pos += 12 + chunk_len  # length + type + data + crc
-
-        if chunk_type == b"IHDR":
-            width, height = struct.unpack(">II", chunk_data[:8])
-            bit_depth = chunk_data[8]
-            color_type = chunk_data[9]
-        elif chunk_type == b"IDAT":
-            idat_chunks.append(chunk_data)
-        elif chunk_type == b"IEND":
-            break
-
-    if not idat_chunks:
-        raise ValueError("No IDAT chunks found in PNG")
-
-    compressed = b"".join(idat_chunks)
-    filtered = zlib.decompress(compressed)
-
-    # Determine bytes per pixel
-    if color_type == 0:  # grayscale
-        channels = 1
-    elif color_type == 2:  # RGB
-        channels = 3
-    elif color_type == 6:  # RGBA
-        channels = 4
-    else:
-        raise ValueError(f"Unsupported PNG color type: {color_type}")
-
-    # For sub-byte bit depths (1, 2, 4), stride is ceil(width * channels * bit_depth / 8)
-    # and bpp for filtering is max(1, channels * bit_depth // 8)
-    stride = (width * channels * bit_depth + 7) // 8
-    bpp = max(1, channels * bit_depth // 8)
-    raw_pixels = _unfilter_png_rows_stride(filtered, height, stride, bpp)
-
-    # Strip alpha channel for PDF (RGBA → RGB)
-    if color_type == 6:
-        stripped = bytearray()
-        row_bytes = width * 4
-        for y in range(height):
-            row_start = y * row_bytes
-            for x in range(width):
-                px = row_start + x * 4
-                stripped.extend(raw_pixels[px : px + 3])
-        raw_pixels = bytes(stripped)
-        color_type = 2  # treat as RGB for PDF
-
-    return width, height, bit_depth, color_type, raw_pixels
-
-
-def _unfilter_png_rows(
-    filtered: bytes, width: int, height: int, bpp: int
-) -> bytes:
-    """Reconstruct raw pixel data from PNG-filtered scanlines (8-bit channels)."""
-    stride = width * bpp
-    return _unfilter_png_rows_stride(filtered, height, stride, bpp)
-
-
-def _unfilter_png_rows_stride(
-    filtered: bytes, height: int, stride: int, bpp: int
-) -> bytes:
-    """Reconstruct raw pixel data from PNG-filtered scanlines."""
-    result = bytearray(height * stride)
-    prev_row = bytes(stride)
-
-    for y in range(height):
-        src_offset = y * (stride + 1)
-        filter_type = filtered[src_offset]
-        row_data = filtered[src_offset + 1 : src_offset + 1 + stride]
-        dst_offset = y * stride
-
-        if filter_type == 0:  # None
-            result[dst_offset : dst_offset + stride] = row_data
-        elif filter_type == 1:  # Sub
-            row = bytearray(row_data)
-            for i in range(bpp, stride):
-                row[i] = (row[i] + row[i - bpp]) & 0xFF
-            result[dst_offset : dst_offset + stride] = row
-        elif filter_type == 2:  # Up
-            row = bytearray(stride)
-            for i in range(stride):
-                row[i] = (row_data[i] + prev_row[i]) & 0xFF
-            result[dst_offset : dst_offset + stride] = row
-        elif filter_type == 3:  # Average
-            row = bytearray(stride)
-            for i in range(stride):
-                left = row[i - bpp] if i >= bpp else 0
-                up = prev_row[i]
-                row[i] = (row_data[i] + (left + up) // 2) & 0xFF
-            result[dst_offset : dst_offset + stride] = row
-        elif filter_type == 4:  # Paeth
-            row = bytearray(stride)
-            for i in range(stride):
-                left = row[i - bpp] if i >= bpp else 0
-                up = prev_row[i]
-                up_left = prev_row[i - bpp] if i >= bpp else 0
-                row[i] = (row_data[i] + _paeth_predictor(left, up, up_left)) & 0xFF
-            result[dst_offset : dst_offset + stride] = row
-        else:
-            raise ValueError(f"Unknown PNG filter type: {filter_type}")
-
-        prev_row = result[dst_offset : dst_offset + stride]
-
-    return bytes(result)
-
-
-def _paeth_predictor(a: int, b: int, c: int) -> int:
-    """PNG Paeth predictor function."""
-    p = a + b - c
-    pa = abs(p - a)
-    pb = abs(p - b)
-    pc = abs(p - c)
-    if pa <= pb and pa <= pc:
-        return a
-    elif pb <= pc:
-        return b
-    return c
-
-
-def png_pages_to_pdf(
-    pages: list[tuple[bytes, int, int, int]],
+def pages_to_pdf(
+    pages: Iterator[ScannedPage],
+    *,
+    dpi: int = 300,
     color_mode: ColorMode = ColorMode.COLOR,
-) -> bytes:
-    """Convert a list of PNG pages to a single PDF file.
+    image_format: ImageFormat = ImageFormat.JPEG,
+    jpeg_quality: int = 85,
+) -> tuple[bytes, int, int, int]:
+    """Convert scanned pages to a single PDF file.
 
-    Each element is ``(png_bytes, width_px, height_px, dpi)``.
-    Returns the complete PDF file as bytes.
+    *pages* is an iterator of :class:`ScannedPage` objects carrying raw
+    pixel data.  Each page is encoded (JPEG or PNG) and added to the PDF
+    incrementally so only one page's raw pixels live in memory at a time.
+
+    Returns ``(pdf_bytes, page_count, first_width, first_height)``.
     """
-    if not pages:
-        raise ValueError("No pages to convert")
-
     objects: list[bytes] = []  # 1-indexed (objects[0] unused)
     objects.append(b"")  # placeholder for index 0
 
@@ -163,9 +35,16 @@ def png_pages_to_pdf(
     objects.append(b"")  # pages placeholder
 
     page_obj_ids: list[int] = []
+    first_w = first_h = 0
 
-    for png_data, width_px, height_px, dpi in pages:
-        w, h, bit_depth, color_type, raw_pixels = _parse_png(png_data)
+    for page in pages:
+        w, h = page.width, page.height
+        raw_pixels = page.data
+        color_type = page.color_type
+        bit_depth = page.bit_depth
+
+        if first_w == 0:
+            first_w, first_h = w, h
 
         # Apply color mode conversion
         if color_mode == ColorMode.GRAY:
@@ -176,36 +55,61 @@ def png_pages_to_pdf(
         elif color_mode == ColorMode.BW:
             if color_type == 2:  # RGB → grayscale first
                 raw_pixels = rgb_to_gray(raw_pixels, w, h)
-            if bit_depth == 8:  # 8-bit grayscale → 1-bit
-                raw_pixels = gray_to_bw(raw_pixels, w, h)
-            color_type = 0
-            bit_depth = 1
+            if image_format == ImageFormat.JPEG:
+                # JPEG doesn't support 1-bit; use 8-bit grayscale
+                color_type = 0
+                bit_depth = 8
+            else:
+                if bit_depth == 8:  # 8-bit grayscale → 1-bit
+                    raw_pixels = gray_to_bw(raw_pixels, w, h)
+                color_type = 0
+                bit_depth = 1
+
+        # Encode image data
+        if image_format == ImageFormat.JPEG:
+            img_stream = encode_jpeg(raw_pixels, w, h, color_type, jpeg_quality)
+            filter_name = "/DCTDecode"
+            # JPEG carries its own bit depth; PDF needs BitsPerComponent = 8
+            pdf_bpc = 8
+        else:
+            # PNG path: prepend filter byte 0 to each row, then zlib compress
+            if bit_depth == 1:
+                row_bytes = (w + 7) // 8
+            elif color_type == 2:
+                row_bytes = w * 3
+            else:
+                row_bytes = w
+
+            filtered = bytearray()
+            for y in range(h):
+                filtered.append(0)  # PNG filter type: None
+                src = y * row_bytes
+                filtered.extend(raw_pixels[src:src + row_bytes])
+
+            img_stream = zlib.compress(bytes(filtered))
+            filter_name = "/FlateDecode"
+            pdf_bpc = bit_depth
 
         if color_type == 0:
-            color_space = b"/DeviceGray"
-        elif color_type == 2:
-            color_space = b"/DeviceRGB"
+            color_space = "/DeviceGray"
         else:
-            raise ValueError(f"Unsupported color type for PDF: {color_type}")
-
-        compressed_pixels = zlib.compress(raw_pixels)
+            color_space = "/DeviceRGB"
 
         # Image XObject
         img_obj_id = len(objects)
-        img_stream = compressed_pixels
         img_dict = (
             f"<< /Type /XObject /Subtype /Image "
             f"/Width {w} /Height {h} "
-            f"/BitsPerComponent {bit_depth} "
-            f"/ColorSpace {color_space.decode()} "
-            f"/Filter /FlateDecode "
+            f"/BitsPerComponent {pdf_bpc} "
+            f"/ColorSpace {color_space} "
+            f"/Filter {filter_name} "
             f"/Length {len(img_stream)} >>"
         ).encode()
         objects.append(img_dict + b"\nstream\n" + img_stream + b"\nendstream")
 
         # Content stream: draw image full-page
-        media_w = width_px * 72.0 / dpi
-        media_h = height_px * 72.0 / dpi
+        media_w = w * 72.0 / dpi
+        media_h = h * 72.0 / dpi
         content_bytes = f"q {media_w:.4f} 0 0 {media_h:.4f} 0 0 cm /Im0 Do Q".encode()
         content_obj_id = len(objects)
         content_dict = f"<< /Length {len(content_bytes)} >>".encode()
@@ -221,6 +125,9 @@ def png_pages_to_pdf(
         ).encode()
         objects.append(page_obj)
         page_obj_ids.append(page_obj_id)
+
+    if not page_obj_ids:
+        raise ValueError("No pages to convert")
 
     # Fill catalog (object 1)
     objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
@@ -252,4 +159,4 @@ def png_pages_to_pdf(
     buf.extend(f"{xref_offset}\n".encode())
     buf.extend(b"%%EOF\n")
 
-    return bytes(buf)
+    return bytes(buf), len(page_obj_ids), first_w, first_h

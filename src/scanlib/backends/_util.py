@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import struct
-import zlib
 from collections.abc import Callable
 
 from .._types import ScanAborted
@@ -15,13 +13,6 @@ def check_progress(progress: Callable[[int], bool] | None, percent: int) -> None
     """Call the progress callback; raise ScanAborted if it returns False."""
     if progress is not None and progress(percent) is False:
         raise ScanAborted("Scan aborted")
-
-
-def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
-    """Build a single PNG chunk with CRC."""
-    chunk = chunk_type + data
-    crc = struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
-    return struct.pack(">I", len(data)) + chunk + crc
 
 
 def rgb_to_gray(data: bytes, width: int, height: int) -> bytes:
@@ -69,25 +60,3 @@ def trim_rows(data: bytes, height: int, stride: int, row_width: int) -> bytes:
     return bytes(trimmed)
 
 
-def raw_to_png(
-    raw_data: bytes,
-    width: int,
-    height: int,
-    color_type: int,
-    bit_depth: int = 8,
-) -> bytes:
-    """Build a PNG file from pre-filtered raw pixel data.
-
-    *raw_data* must already contain one filter-type byte (``\\x00``) at the
-    start of each row followed by the pixel bytes for that row.
-
-    *color_type*: 0 = grayscale, 2 = RGB, 6 = RGBA.
-    """
-    png = b"\x89PNG\r\n\x1a\n"
-    png += _png_chunk(
-        b"IHDR",
-        struct.pack(">IIBBBBB", width, height, bit_depth, color_type, 0, 0, 0),
-    )
-    png += _png_chunk(b"IDAT", zlib.compress(raw_data))
-    png += _png_chunk(b"IEND", b"")
-    return png

@@ -1,68 +1,36 @@
-import struct
+"""Tests for shared backend utilities."""
+
+from scanlib.backends._util import check_progress, trim_rows
+from scanlib._types import ScanAborted
 
 import pytest
 
-from scanlib.backends._util import raw_to_png
+
+class TestCheckProgress:
+    def test_none_callback(self):
+        # Should not raise
+        check_progress(None, 50)
+
+    def test_true_return(self):
+        check_progress(lambda p: True, 50)
+
+    def test_false_return_aborts(self):
+        with pytest.raises(ScanAborted):
+            check_progress(lambda p: False, 50)
+
+    def test_none_return_does_not_abort(self):
+        # Returning None (not False) should not abort
+        check_progress(lambda p: None, 50)
 
 
-class TestRawToPng:
-    def _parse_ihdr(self, png_data):
-        """Extract width, height, bit_depth, color_type from PNG IHDR chunk."""
-        assert png_data[:8] == b"\x89PNG\r\n\x1a\n"
-        # IHDR chunk starts at byte 8: length(4) + "IHDR"(4) + data(13) + crc(4)
-        ihdr_data = png_data[16:29]
-        width, height, bit_depth, color_type = struct.unpack(">IIBB", ihdr_data[:10])
-        return width, height, bit_depth, color_type
+class TestTrimRows:
+    def test_no_padding(self):
+        data = bytes([1, 2, 3, 4, 5, 6])
+        result = trim_rows(data, height=2, stride=3, row_width=3)
+        assert result == data
 
-    def test_grayscale_8bit(self):
-        width, height = 4, 2
-        # Build raw data with filter byte per row
-        raw = bytearray()
-        for y in range(height):
-            raw.append(0)  # filter: none
-            raw.extend([128] * width)
-
-        png = raw_to_png(bytes(raw), width, height, color_type=0, bit_depth=8)
-
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
-        w, h, bd, ct = self._parse_ihdr(png)
-        assert (w, h, bd, ct) == (4, 2, 8, 0)
-
-    def test_rgb_8bit(self):
-        width, height = 3, 2
-        raw = bytearray()
-        for y in range(height):
-            raw.append(0)
-            raw.extend([255, 0, 0] * width)  # red pixels
-
-        png = raw_to_png(bytes(raw), width, height, color_type=2, bit_depth=8)
-
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
-        w, h, bd, ct = self._parse_ihdr(png)
-        assert (w, h, bd, ct) == (3, 2, 8, 2)
-
-    def test_grayscale_1bit(self):
-        width, height = 8, 2
-        row_bytes = (width + 7) // 8  # 1 byte per row for 8 pixels
-        raw = bytearray()
-        for y in range(height):
-            raw.append(0)
-            raw.extend([0xFF] * row_bytes)  # all white
-
-        png = raw_to_png(bytes(raw), width, height, color_type=0, bit_depth=1)
-
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
-        w, h, bd, ct = self._parse_ihdr(png)
-        assert (w, h, bd, ct) == (8, 2, 1, 0)
-
-    def test_rgba_8bit(self):
-        width, height = 2, 2
-        raw = bytearray()
-        for y in range(height):
-            raw.append(0)
-            raw.extend([255, 0, 0, 255] * width)
-
-        png = raw_to_png(bytes(raw), width, height, color_type=6, bit_depth=8)
-
-        w, h, bd, ct = self._parse_ihdr(png)
-        assert (w, h, bd, ct) == (2, 2, 8, 6)
+    def test_with_padding(self):
+        # stride=4, row_width=3 -> strip last byte of each row
+        data = bytes([1, 2, 3, 0, 4, 5, 6, 0])
+        result = trim_rows(data, height=2, stride=4, row_width=3)
+        assert result == bytes([1, 2, 3, 4, 5, 6])

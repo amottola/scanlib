@@ -168,12 +168,14 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = backend.scan_pages(scanner, ScanOptions(dpi=300, color_mode=ColorMode.COLOR))
+        pages = list(backend.scan_pages(scanner, ScanOptions(dpi=300, color_mode=ColorMode.COLOR)))
 
         assert len(pages) == 1
-        assert pages[0].png_data.startswith(b"\x89PNG")
         assert pages[0].width == 100
         assert pages[0].height == 200
+        assert pages[0].color_type == 2  # RGB
+        assert pages[0].bit_depth == 8
+        assert len(pages[0].data) == 100 * 200 * 3
 
     def test_scan_pages_not_open_raises(self, mock_sane):
         mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
@@ -182,7 +184,8 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
 
         with pytest.raises(ScanError, match="not open"):
-            backend.scan_pages(scanners[0], ScanOptions())
+            # Generator must be consumed to trigger the error
+            list(backend.scan_pages(scanners[0], ScanOptions()))
 
     def test_scan_pages_sets_options(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -191,7 +194,7 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        backend.scan_pages(scanner, ScanOptions(dpi=600, color_mode=ColorMode.GRAY))
+        list(backend.scan_pages(scanner, ScanOptions(dpi=600, color_mode=ColorMode.GRAY)))
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["mode"] == "gray"
@@ -204,7 +207,7 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        backend.scan_pages(scanner, ScanOptions(page_size=PageSize(2100, 2970)))
+        list(backend.scan_pages(scanner, ScanOptions(page_size=PageSize(2100, 2970))))
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["br-x"] == 210.0
@@ -226,7 +229,7 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER))
+        list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER)))
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["source"] == "Automatic Document Feeder"
@@ -238,7 +241,7 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        backend.scan_pages(scanner, ScanOptions())
+        list(backend.scan_pages(scanner, ScanOptions()))
 
         option_names = [c.args[0] for c in mock_dev.set_option.call_args_list]
         assert "br-x" not in option_names
@@ -251,7 +254,7 @@ class TestSaneBackend:
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         with pytest.raises(ScanAborted):
-            backend.scan_pages(scanner, ScanOptions(progress=lambda pct: False))
+            list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: False)))
 
         mock_dev.start.assert_not_called()
         mock_dev.cancel.assert_called()
@@ -265,7 +268,7 @@ class TestSaneBackend:
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         calls = []
-        backend.scan_pages(scanner, ScanOptions(progress=lambda pct: (calls.append(pct) or True)))
+        list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: (calls.append(pct) or True))))
 
         assert 0 in calls
         assert 100 in calls
@@ -278,8 +281,10 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = backend.scan_pages(scanner, ScanOptions(progress=lambda pct: None))
-        assert pages[0].png_data.startswith(b"\x89PNG")
+        pages = list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: None)))
+        assert len(pages) == 1
+        assert pages[0].color_type == 0  # grayscale
+        assert pages[0].bit_depth == 8
 
     def test_scan_pages_hardware_cancel_raises_scan_aborted(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -289,7 +294,7 @@ class TestSaneBackend:
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         with pytest.raises(ScanAborted, match="cancelled"):
-            backend.scan_pages(scanner, ScanOptions())
+            list(backend.scan_pages(scanner, ScanOptions()))
 
     def test_scan_pages_feeder_multi_page(self, mock_sane):
         """Feeder scanning: returns multiple pages, stops on no_docs."""
@@ -313,11 +318,14 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER))
+        pages = list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER)))
 
         assert len(pages) == 3
         for p in pages:
-            assert p.png_data.startswith(b"\x89PNG")
+            assert p.color_type == 0
+            assert p.bit_depth == 8
+            assert p.width == 50
+            assert p.height == 50
 
     def test_scan_pages_feeder_single_page(self, mock_sane):
         """Feeder with only one page: returns it, stops on no_docs."""
@@ -339,11 +347,11 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER))
+        pages = list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER)))
         assert len(pages) == 1
 
-    def test_scan_pages_gray_mode_converts_rgb(self, mock_sane):
-        """Scanning in GRAY mode with RGB input converts to grayscale."""
+    def test_scan_pages_rgb_returns_raw(self, mock_sane):
+        """RGB scan returns raw pixel data with color_type=2."""
         mock_dev = _make_mock_dev()
         pixel_data = _make_rgb_pixel_data(4, 2, r=255, g=255, b=255)
         _setup_scan(mock_dev, 4, 2, pixel_data, frame=1)
@@ -351,14 +359,16 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.GRAY))
+        pages = list(backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.COLOR)))
         assert len(pages) == 1
-        assert pages[0].png_data.startswith(b"\x89PNG")
+        assert pages[0].color_type == 2  # RGB
+        assert pages[0].bit_depth == 8
         assert pages[0].width == 4
         assert pages[0].height == 2
+        assert len(pages[0].data) == 4 * 2 * 3
 
-    def test_scan_pages_bw_mode_converts(self, mock_sane):
-        """Scanning in BW mode produces 1-bit output."""
+    def test_scan_pages_grayscale_returns_raw(self, mock_sane):
+        """Grayscale scan returns raw pixel data with color_type=0."""
         mock_dev = _make_mock_dev()
         pixel_data = _make_gray_pixel_data(8, 2, value=200)
         _setup_scan(mock_dev, 8, 2, pixel_data, frame=0)
@@ -366,9 +376,10 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.BW))
+        pages = list(backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.GRAY)))
         assert len(pages) == 1
-        assert pages[0].png_data.startswith(b"\x89PNG")
+        assert pages[0].color_type == 0  # grayscale
+        assert pages[0].bit_depth == 8
 
     def test_open_scanner_populates_defaults(self, mock_sane):
         """Defaults are read from device options after open."""

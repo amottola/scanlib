@@ -1,184 +1,166 @@
 """Tests for the stdlib-only PDF writer."""
 
-import struct
-import zlib
-
 import pytest
 
-from scanlib._pdf import _parse_png, _unfilter_png_rows, png_pages_to_pdf
+from scanlib._pdf import pages_to_pdf
+from scanlib._types import ColorMode, ImageFormat, ScannedPage
 from scanlib.backends._util import gray_to_bw, rgb_to_gray
-from scanlib._types import ColorMode
 
 
-def _make_png(width, height, color_type=2, bit_depth=8, filter_type=0):
-    """Create a minimal valid PNG with the given parameters.
+def _make_raw(width, height, color_type=2, bit_depth=8):
+    """Create raw pixel data for testing.
 
-    Returns PNG file bytes.
+    Returns a ScannedPage with deterministic pixel values.
     """
     if color_type == 0 and bit_depth == 1:
         # 1-bit grayscale: pack bits
         row_bytes = (width + 7) // 8
-        raw_rows = []
+        data = bytearray(row_bytes * height)
         for y in range(height):
-            row = bytearray(row_bytes)
             for x in range(width):
                 if (y * 37 + x * 13) & 1:
-                    row[x // 8] |= 1 << (7 - (x % 8))
-            raw_rows.append(bytes([0]) + bytes(row))
+                    data[y * row_bytes + x // 8] |= 1 << (7 - (x % 8))
+        return ScannedPage(
+            data=bytes(data), width=width, height=height,
+            color_type=color_type, bit_depth=bit_depth,
+        )
+
+    if color_type == 0:
+        channels = 1
+    elif color_type == 2:
+        channels = 3
     else:
-        if color_type == 0:
-            channels = 1
-        elif color_type == 2:
-            channels = 3
-        elif color_type == 6:
-            channels = 4
-        else:
-            raise ValueError(f"Unsupported color type: {color_type}")
+        raise ValueError(f"Unsupported color type: {color_type}")
 
-        bpp = channels * bit_depth // 8
-
-        # Build raw pixel data with filter bytes
-        raw_rows = []
-        for y in range(height):
-            row = bytes([(y * 37 + x * 13) & 0xFF for x in range(width * bpp)])
-            raw_rows.append(bytes([0]) + row)
-
-    filtered_data = b"".join(raw_rows)
-    compressed = zlib.compress(filtered_data)
-
-    # Build PNG
-    def chunk(chunk_type, data):
-        c = chunk_type + data
-        crc = struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
-        return struct.pack(">I", len(data)) + c + crc
-
-    ihdr = struct.pack(">IIBBBBB", width, height, bit_depth, color_type, 0, 0, 0)
-    png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", ihdr)
-    png += chunk(b"IDAT", compressed)
-    png += chunk(b"IEND", b"")
-    return png
+    bpp = channels * bit_depth // 8
+    data = bytes(
+        [(y * 37 + x * 13) & 0xFF for y in range(height) for x in range(width * bpp)]
+    )
+    return ScannedPage(
+        data=data, width=width, height=height,
+        color_type=color_type, bit_depth=bit_depth,
+    )
 
 
-class TestParsePng:
-    def test_rgb_image(self):
-        png = _make_png(4, 3, color_type=2)
-        w, h, bd, ct, pixels = _parse_png(png)
-        assert w == 4
-        assert h == 3
-        assert bd == 8
-        assert ct == 2
-        assert len(pixels) == 4 * 3 * 3  # w * h * RGB
+class TestPagesToPdfPng:
+    """Tests for pages_to_pdf with PNG (FlateDecode) encoding."""
 
-    def test_grayscale_image(self):
-        png = _make_png(8, 2, color_type=0)
-        w, h, bd, ct, pixels = _parse_png(png)
-        assert w == 8
-        assert h == 2
-        assert ct == 0
-        assert len(pixels) == 8 * 2
-
-    def test_rgba_strips_alpha(self):
-        png = _make_png(2, 2, color_type=6)
-        w, h, bd, ct, pixels = _parse_png(png)
-        assert ct == 2  # converted to RGB
-        assert len(pixels) == 2 * 2 * 3  # w * h * RGB (alpha stripped)
-
-    def test_invalid_data_raises(self):
-        with pytest.raises(ValueError, match="Invalid PNG"):
-            _parse_png(b"not a png")
-
-
-class TestUnfilterPngRows:
-    def test_filter_none(self):
-        # 2x2 grayscale, filter type 0
-        filtered = bytes([0, 10, 20, 0, 30, 40])
-        result = _unfilter_png_rows(filtered, 2, 2, 1)
-        assert result == bytes([10, 20, 30, 40])
-
-    def test_filter_sub(self):
-        # 4x1 grayscale, filter type 1 (Sub)
-        # Raw: [1, 10, 5, 5, 5] -> result: [10, 15, 20, 25]
-        filtered = bytes([1, 10, 5, 5, 5])
-        result = _unfilter_png_rows(filtered, 4, 1, 1)
-        assert result == bytes([10, 15, 20, 25])
-
-    def test_filter_up(self):
-        # 2x2 grayscale, filter type 2 (Up)
-        # Row 0 (None): [0, 10, 20]
-        # Row 1 (Up):   [2,  5,  5] -> [10+5, 20+5] = [15, 25]
-        filtered = bytes([0, 10, 20, 2, 5, 5])
-        result = _unfilter_png_rows(filtered, 2, 2, 1)
-        assert result == bytes([10, 20, 15, 25])
-
-    def test_filter_average(self):
-        # 3x1 grayscale, filter type 3 (Average)
-        # bpp=1, prev_row=all zeros
-        # x[0] = raw[0] + floor((0 + 0) / 2) = 20
-        # x[1] = raw[1] + floor((20 + 0) / 2) = 10 + 10 = 20
-        # x[2] = raw[2] + floor((20 + 0) / 2) = 10 + 10 = 20
-        filtered = bytes([3, 20, 10, 10])
-        result = _unfilter_png_rows(filtered, 3, 1, 1)
-        assert result == bytes([20, 20, 20])
-
-    def test_filter_paeth(self):
-        # 2x2 grayscale, filter type 4 (Paeth)
-        # Row 0 (None): [0, 100, 100]
-        # Row 1 (Paeth): [4, 10, 10]
-        # For row 1:
-        #   x[0]: a=0, b=100, c=0, paeth=100 -> 10+100=110
-        #   x[1]: a=110, b=100, c=100, paeth -> p=110, pa=0, pb=10, pc=10 -> a=110 -> 10+110=120
-        filtered = bytes([0, 100, 100, 4, 10, 10])
-        result = _unfilter_png_rows(filtered, 2, 2, 1)
-        assert result == bytes([100, 100, 110, 120])
-
-
-class TestPngPagesToPdf:
     def test_single_page(self):
-        png = _make_png(100, 200, color_type=2)
-        pdf = png_pages_to_pdf([(png, 100, 200, 300)])
-
+        page = _make_raw(100, 200, color_type=2)
+        pdf, count, w, h = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.PNG,
+        )
         assert pdf[:8] == b"%PDF-1.4"
         assert b"%%EOF" in pdf
         assert b"/Type /Catalog" in pdf
         assert b"/Type /Pages" in pdf
         assert b"/Type /Page" in pdf
         assert b"/Count 1" in pdf
+        assert count == 1
+        assert w == 100
+        assert h == 200
 
     def test_multi_page(self):
-        png1 = _make_png(100, 200, color_type=2)
-        png2 = _make_png(50, 100, color_type=0)
-        pdf = png_pages_to_pdf([
-            (png1, 100, 200, 300),
-            (png2, 50, 100, 150),
-        ])
-
+        page1 = _make_raw(100, 200, color_type=2)
+        page2 = _make_raw(50, 100, color_type=0)
+        pdf, count, w, h = pages_to_pdf(
+            iter([page1, page2]), dpi=300, image_format=ImageFormat.PNG,
+        )
         assert pdf[:8] == b"%PDF-1.4"
         assert b"/Count 2" in pdf
+        assert count == 2
+        assert w == 100  # first page dimensions
+        assert h == 200
 
     def test_grayscale_page(self):
-        png = _make_png(10, 10, color_type=0)
-        pdf = png_pages_to_pdf([(png, 10, 10, 72)])
-
+        page = _make_raw(10, 10, color_type=0)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceGray" in pdf
         assert b"/Type /Page" in pdf
 
     def test_rgb_page(self):
-        png = _make_png(10, 10, color_type=2)
-        pdf = png_pages_to_pdf([(png, 10, 10, 72)])
-
+        page = _make_raw(10, 10, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceRGB" in pdf
 
     def test_empty_pages_raises(self):
         with pytest.raises(ValueError, match="No pages"):
-            png_pages_to_pdf([])
+            pages_to_pdf(iter([]), dpi=300, image_format=ImageFormat.PNG)
 
     def test_page_dimensions(self):
         # 300 DPI, 300x600 px -> 72x144 pt
-        png = _make_png(300, 600, color_type=2)
-        pdf = png_pages_to_pdf([(png, 300, 600, 300)])
-
+        page = _make_raw(300, 600, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.PNG,
+        )
         assert b"/MediaBox [0 0 72.0000 144.0000]" in pdf
+
+    def test_flatedecode_filter(self):
+        page = _make_raw(10, 10, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, image_format=ImageFormat.PNG,
+        )
+        assert b"/FlateDecode" in pdf
+
+
+class TestPagesToPdfJpeg:
+    """Tests for pages_to_pdf with JPEG (DCTDecode) encoding."""
+
+    def test_single_page_rgb(self):
+        page = _make_raw(16, 16, color_type=2)
+        pdf, count, w, h = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.JPEG,
+        )
+        assert pdf[:8] == b"%PDF-1.4"
+        assert b"/Filter /DCTDecode" in pdf
+        assert b"/DeviceRGB" in pdf
+        assert b"/BitsPerComponent 8" in pdf
+        assert count == 1
+
+    def test_single_page_grayscale(self):
+        page = _make_raw(16, 16, color_type=0)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.JPEG,
+        )
+        assert b"/Filter /DCTDecode" in pdf
+        assert b"/DeviceGray" in pdf
+
+    def test_jpeg_produces_valid_dctdecode(self):
+        """JPEG encoding produces a valid PDF with DCTDecode filter."""
+        page = _make_raw(100, 100, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.JPEG,
+        )
+        assert b"/Filter /DCTDecode" in pdf
+        # JPEG stream should start with JFIF SOI marker
+        soi_idx = pdf.find(b"\xff\xd8\xff\xe0")
+        assert soi_idx > 0
+
+    def test_quality_affects_size(self):
+        page = _make_raw(100, 100, color_type=2)
+        pdf_low, *_ = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.JPEG, jpeg_quality=10,
+        )
+        page = _make_raw(100, 100, color_type=2)
+        pdf_high, *_ = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.JPEG, jpeg_quality=95,
+        )
+        assert len(pdf_low) < len(pdf_high)
+
+    def test_bw_mode_uses_grayscale_jpeg(self):
+        """BW mode with JPEG uses 8-bit grayscale (JPEG can't do 1-bit)."""
+        page = _make_raw(16, 16, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=300, color_mode=ColorMode.BW,
+            image_format=ImageFormat.JPEG,
+        )
+        assert b"/DeviceGray" in pdf
+        assert b"/BitsPerComponent 8" in pdf
+        assert b"/Filter /DCTDecode" in pdf
 
 
 class TestRgbToGray:
@@ -216,45 +198,59 @@ class TestGrayToBw:
 
 class TestColorModeConversion:
     def test_gray_mode_converts_rgb(self):
-        png = _make_png(4, 4, color_type=2)
-        pdf = png_pages_to_pdf([(png, 4, 4, 72)], color_mode=ColorMode.GRAY)
-
+        page = _make_raw(4, 4, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, color_mode=ColorMode.GRAY,
+            image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceGray" in pdf
         assert b"/BitsPerComponent 8" in pdf
         assert b"/DeviceRGB" not in pdf
 
     def test_bw_mode_converts_rgb(self):
-        png = _make_png(8, 4, color_type=2)
-        pdf = png_pages_to_pdf([(png, 8, 4, 72)], color_mode=ColorMode.BW)
-
+        page = _make_raw(8, 4, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, color_mode=ColorMode.BW,
+            image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceGray" in pdf
         assert b"/BitsPerComponent 1" in pdf
 
     def test_bw_mode_from_grayscale(self):
-        png = _make_png(8, 4, color_type=0)
-        pdf = png_pages_to_pdf([(png, 8, 4, 72)], color_mode=ColorMode.BW)
-
+        page = _make_raw(8, 4, color_type=0)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, color_mode=ColorMode.BW,
+            image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceGray" in pdf
         assert b"/BitsPerComponent 1" in pdf
 
-    def test_bw_mode_from_1bit_png(self):
-        """1-bit PNG input with BW mode passes through without re-conversion."""
-        png = _make_png(8, 4, color_type=0, bit_depth=1)
-        pdf = png_pages_to_pdf([(png, 8, 4, 72)], color_mode=ColorMode.BW)
-
+    def test_bw_mode_from_1bit(self):
+        """1-bit input with BW mode passes through without re-conversion."""
+        page = _make_raw(8, 4, color_type=0, bit_depth=1)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, color_mode=ColorMode.BW,
+            image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceGray" in pdf
         assert b"/BitsPerComponent 1" in pdf
 
     def test_color_mode_default_unchanged(self):
-        png = _make_png(4, 4, color_type=2)
-        pdf = png_pages_to_pdf([(png, 4, 4, 72)])
-
+        page = _make_raw(4, 4, color_type=2)
+        pdf, *_ = pages_to_pdf(
+            iter([page]), dpi=72, image_format=ImageFormat.PNG,
+        )
         assert b"/DeviceRGB" in pdf
         assert b"/BitsPerComponent 8" in pdf
 
     def test_bw_pdf_smaller_than_color(self):
-        png = _make_png(100, 100, color_type=2)
-        pdf_color = png_pages_to_pdf([(png, 100, 100, 300)])
-        pdf_bw = png_pages_to_pdf([(png, 100, 100, 300)], color_mode=ColorMode.BW)
-
+        page = _make_raw(100, 100, color_type=2)
+        pdf_color, *_ = pages_to_pdf(
+            iter([page]), dpi=300, image_format=ImageFormat.PNG,
+        )
+        page = _make_raw(100, 100, color_type=2)
+        pdf_bw, *_ = pages_to_pdf(
+            iter([page]), dpi=300, color_mode=ColorMode.BW,
+            image_format=ImageFormat.PNG,
+        )
         assert len(pdf_bw) < len(pdf_color)

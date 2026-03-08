@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -51,6 +51,13 @@ class ScanSource(enum.Enum):
     FEEDER = "feeder"
 
 
+class ImageFormat(enum.Enum):
+    """Image encoding format used inside the PDF."""
+
+    PNG = "png"
+    JPEG = "jpeg"
+
+
 # --- Data classes ---
 
 
@@ -85,11 +92,17 @@ class ScanOptions:
 
 @dataclass(frozen=True)
 class ScannedPage:
-    """A single scanned page as PNG data (internal type)."""
+    """A single scanned page as raw pixel data (internal type).
 
-    png_data: bytes
+    *data* contains raw pixel bytes with no PNG filter-byte prefix.
+    *color_type* follows PNG conventions: 0 = grayscale, 2 = RGB.
+    """
+
+    data: bytes
     width: int
     height: int
+    color_type: int
+    bit_depth: int
 
 
 @dataclass(frozen=True)
@@ -250,6 +263,8 @@ class Scanner:
         source: ScanSource | None = None,
         progress: Callable[[int], bool] | None = None,
         next_page: Callable[[int], bool] | None = None,
+        image_format: ImageFormat = ImageFormat.JPEG,
+        jpeg_quality: int = 85,
     ) -> ScannedDocument:
         """Scan a document and return PDF bytes.
 
@@ -260,6 +275,13 @@ class Scanner:
         the callback is called after each page with the number of pages
         scanned so far.  Return ``True`` to scan another page or ``False``
         to stop.
+
+        *image_format* selects the encoding for page images inside the
+        PDF: :attr:`ImageFormat.JPEG` (default, smaller files) or
+        :attr:`ImageFormat.PNG` (lossless).
+
+        *jpeg_quality* (1–100) controls JPEG compression quality; ignored
+        when *image_format* is PNG.
         """
         if not self._is_open:
             raise ScannerNotOpenError("Scanner must be opened before scanning")
@@ -272,17 +294,20 @@ class Scanner:
             next_page=next_page,
         )
         pages = self._backend_impl.scan_pages(self, options)
-        from ._pdf import png_pages_to_pdf
+        from ._pdf import pages_to_pdf
 
-        pdf_data = png_pages_to_pdf(
-            [(p.png_data, p.width, p.height, dpi) for p in pages],
+        pdf_data, page_count, first_w, first_h = pages_to_pdf(
+            pages,
+            dpi=dpi,
             color_mode=color_mode,
+            image_format=image_format,
+            jpeg_quality=jpeg_quality,
         )
         return ScannedDocument(
             data=pdf_data,
-            page_count=len(pages),
-            width=pages[0].width,
-            height=pages[0].height,
+            page_count=page_count,
+            width=first_w,
+            height=first_h,
             dpi=dpi,
             color_mode=color_mode,
             scanner=self,
@@ -305,4 +330,4 @@ class ScanBackend(Protocol):
 
     def close_scanner(self, scanner: Scanner) -> None: ...
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]: ...
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]: ...

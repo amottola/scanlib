@@ -6,6 +6,7 @@ import ctypes
 import ctypes.util
 import math
 from collections import namedtuple
+from collections.abc import Iterator
 from typing import Any
 
 from .._types import (
@@ -19,7 +20,7 @@ from .._types import (
     ScanOptions,
     ScanSource,
 )
-from ._util import check_progress, gray_to_bw, raw_to_png, rgb_to_gray, trim_rows
+from ._util import check_progress, trim_rows
 
 # ---------------------------------------------------------------------------
 # Load libsane
@@ -576,7 +577,7 @@ def _read_defaults(dev: _SaneDevice, opts: list[tuple], sources: list[ScanSource
         return None
 
 
-def _scan_one_page(dev: _SaneDevice, color_mode: ColorMode) -> ScannedPage:
+def _scan_one_page(dev: _SaneDevice) -> ScannedPage:
     status = dev.start()
     if status != _STATUS_GOOD:
         name = _STATUS_NAMES.get(status, f"unknown ({status})")
@@ -612,32 +613,14 @@ def _scan_one_page(dev: _SaneDevice, color_mode: ColorMode) -> ScannedPage:
     is_rgb = params.format == _FRAME_RGB
 
     if is_rgb and depth == 8:
-        raw = trim_rows(raw, height, params.bytes_per_line, width * 3)
-
-        if color_mode == ColorMode.GRAY:
-            pixel_data = rgb_to_gray(raw, width, height)
-            color_type = 0
-            bit_depth = 8
-        elif color_mode == ColorMode.BW:
-            gray = rgb_to_gray(raw, width, height)
-            pixel_data = gray_to_bw(gray, width, height)
-            color_type = 0
-            bit_depth = 1
-        else:
-            pixel_data = raw
-            color_type = 2
-            bit_depth = 8
+        pixel_data = trim_rows(raw, height, params.bytes_per_line, width * 3)
+        color_type = 2
+        bit_depth = 8
 
     elif not is_rgb and depth == 8:
         pixel_data = trim_rows(raw, height, params.bytes_per_line, width)
-
-        if color_mode == ColorMode.BW:
-            pixel_data = gray_to_bw(pixel_data, width, height)
-            color_type = 0
-            bit_depth = 1
-        else:
-            color_type = 0
-            bit_depth = 8
+        color_type = 0
+        bit_depth = 8
 
     elif not is_rgb and depth == 1:
         row_bytes = (width + 7) // 8
@@ -650,21 +633,10 @@ def _scan_one_page(dev: _SaneDevice, color_mode: ColorMode) -> ScannedPage:
             f"Unsupported SANE frame: format={params.format}, depth={depth}"
         )
 
-    if bit_depth == 1:
-        row_bytes = (width + 7) // 8
-    elif color_type == 2:
-        row_bytes = width * 3
-    else:
-        row_bytes = width
-
-    png_rows = bytearray()
-    for y in range(height):
-        png_rows.append(0)  # filter type: None
-        row_start = y * row_bytes
-        png_rows.extend(pixel_data[row_start: row_start + row_bytes])
-
-    png_data = raw_to_png(bytes(png_rows), width, height, color_type, bit_depth)
-    return ScannedPage(png_data=png_data, width=width, height=height)
+    return ScannedPage(
+        data=pixel_data, width=width, height=height,
+        color_type=color_type, bit_depth=bit_depth,
+    )
 
 
 class SaneBackend:
@@ -718,7 +690,7 @@ class SaneBackend:
         if dev is not None:
             dev.close()
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]:
         dev = self._handles.get(scanner.name)
         if dev is None:
             raise ScanError("Scanner is not open")
@@ -740,14 +712,14 @@ class SaneBackend:
             check_progress(options.progress, 0)
 
             is_feeder = options.source == ScanSource.FEEDER
-            pages: list[ScannedPage] = []
+            page_count = 0
 
             while True:
                 try:
-                    page = _scan_one_page(dev, options.color_mode)
+                    page = _scan_one_page(dev)
                 except ScanError as exc:
                     msg = str(exc).lower()
-                    if is_feeder and pages and (
+                    if is_feeder and page_count > 0 and (
                         "no docs" in msg or "eof" in msg
                     ):
                         break
@@ -755,18 +727,18 @@ class SaneBackend:
                         raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
                     raise
 
-                pages.append(page)
+                yield page
+                page_count += 1
 
                 if not is_feeder:
-                    if options.next_page is not None and options.next_page(len(pages)):
+                    if options.next_page is not None and options.next_page(page_count):
                         continue
                     break
 
-            if not pages:
+            if page_count == 0:
                 raise ScanError("No pages were scanned")
 
             check_progress(options.progress, 100)
-            return pages
         except ScanAborted:
             dev.cancel()
             raise

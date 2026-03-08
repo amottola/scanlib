@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import threading
+from collections.abc import Iterator
 
 import ImageCaptureCore
 import objc
@@ -23,7 +24,7 @@ from .._types import (
     ScanOptions,
     ScanSource,
 )
-from ._util import MM_PER_INCH, check_progress, raw_to_png
+from ._util import MM_PER_INCH, check_progress
 
 _ICC_SOURCE_MAP = {
     ImageCaptureCore.ICScannerFunctionalUnitTypeFlatbed: ScanSource.FLATBED,
@@ -162,9 +163,10 @@ def _assemble_image(
     nc: int,
     pdt: int,
 ) -> tuple[bytes, int, int, int, int]:
-    """Assemble band data into a complete raw image with PNG filter bytes.
+    """Assemble band data into raw pixel bytes.
 
-    Returns (filtered_data, width, height, color_type, bit_depth).
+    Returns (raw_pixels, width, height, color_type, bit_depth) where
+    *raw_pixels* contains no PNG filter-byte prefix.
     """
     pixel_row_bytes = width * nc * max(bpc // 8, 1)
 
@@ -183,26 +185,24 @@ def _assemble_image(
                 raw[src_off:src_off + pixel_row_bytes]
             )
 
-    # Map pixel data type to PNG color type.
+    # Map pixel data type to color type and extract raw pixels.
     # The scanner may return extra channels (e.g. 4-component RGBX for
-    # RGB mode); strip them when building the PNG rows.
+    # RGB mode); strip them.
     if pdt == 0:  # BW — 1-bit grayscale
         color_type = 0
         bit_depth = 1
         packed_row = (width + 7) // 8
-        filtered = bytearray()
+        out = bytearray()
         for y in range(height):
-            filtered.append(0)
-            filtered.extend(
+            out.extend(
                 full_buf[y * pixel_row_bytes:y * pixel_row_bytes + packed_row]
             )
     elif pdt == 1:  # Gray — 8-bit grayscale
         color_type = 0
         bit_depth = 8
-        filtered = bytearray()
+        out = bytearray()
         for y in range(height):
-            filtered.append(0)
-            filtered.extend(
+            out.extend(
                 full_buf[y * pixel_row_bytes:y * pixel_row_bytes + width]
             )
     else:  # RGB (2) and others — 8-bit RGB
@@ -211,22 +211,20 @@ def _assemble_image(
         rgb_row_bytes = width * 3
         if nc > 3:
             # Strip extra channels (e.g. RGBX → RGB)
-            filtered = bytearray()
+            out = bytearray()
             for y in range(height):
-                filtered.append(0)
                 row_start = y * pixel_row_bytes
                 for x in range(width):
                     off = row_start + x * nc
-                    filtered.extend(full_buf[off:off + 3])
+                    out.extend(full_buf[off:off + 3])
         else:
-            filtered = bytearray()
+            out = bytearray()
             for y in range(height):
-                filtered.append(0)
-                filtered.extend(
+                out.extend(
                     full_buf[y * pixel_row_bytes:y * pixel_row_bytes + rgb_row_bytes]
                 )
 
-    return bytes(filtered), width, height, color_type, bit_depth
+    return bytes(out), width, height, color_type, bit_depth
 
 
 def _run_until(
@@ -406,9 +404,10 @@ class MacOSBackend:
         with self._lock:
             return self._call(self._close_scanner_impl, scanner)
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]:
         with self._lock:
-            return self._call(self._scan_pages_impl, scanner, options)
+            pages = self._call(self._scan_pages_impl, scanner, options)
+        yield from pages
 
     def _list_scanners_impl(self) -> list[Scanner]:
         delegate = self._ensure_browser()
@@ -683,15 +682,13 @@ class MacOSBackend:
                     )
 
                 for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
-                    filtered, width, height, color_type, bit_depth = (
+                    raw, width, height, color_type, bit_depth = (
                         _assemble_image(bands, w, h, bpc, nc, pdt)
                     )
-                    png_data = raw_to_png(
-                        filtered, width, height, color_type, bit_depth
-                    )
-                    all_pages.append(
-                        ScannedPage(png_data=png_data, width=width, height=height)
-                    )
+                    all_pages.append(ScannedPage(
+                        data=raw, width=width, height=height,
+                        color_type=color_type, bit_depth=bit_depth,
+                    ))
 
                 if is_feeder:
                     break
