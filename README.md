@@ -2,7 +2,7 @@
 
 A multiplatform document scanning library for Python.
 
-scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding and pixel conversion are handled by a bundled C extension (using the public-domain [stb_image_write](https://github.com/nothings/stb) library), while PDF assembly uses only the standard library.
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding and pixel conversion are handled by a bundled C extension (using the [toojpeg](https://create.stephan-brumme.com/toojpeg/) library), while PDF assembly uses only the standard library. When [libjpeg-turbo](https://libjpeg-turbo.org/) is installed on the system, JPEG encoding is automatically accelerated via its SIMD-optimized path.
 
 ## Installation
 
@@ -21,6 +21,8 @@ scanlib uses conditional dependencies that are installed automatically by pip on
 | **Windows** | TWAIN (pytwain) | `pytwain` (auto) | C compiler (MSVC via Visual Studio Build Tools) |
 
 A C compiler is required on all platforms to build the bundled accelerator extension. On Linux you also need `libsane` at the system level. On macOS and Windows the scanning frameworks are provided by the OS.
+
+**Optional:** Install `libjpeg-turbo` for ~16x faster JPEG encoding (`brew install jpeg-turbo` on macOS, `apt install libturbojpeg0-dev` on Linux).
 
 ## Quick Start
 

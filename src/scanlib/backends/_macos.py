@@ -169,6 +169,8 @@ def _assemble_image(
     Returns (raw_pixels, width, height, color_type, bit_depth) where
     *raw_pixels* contains no PNG filter-byte prefix.
     """
+    from _scanlib_accel import strip_alpha, trim_rows
+
     pixel_row_bytes = width * nc * max(bpc // 8, 1)
 
     # Allocate full image buffer
@@ -193,39 +195,22 @@ def _assemble_image(
         color_type = 0
         bit_depth = 1
         packed_row = (width + 7) // 8
-        out = bytearray()
-        for y in range(height):
-            out.extend(
-                full_buf[y * pixel_row_bytes:y * pixel_row_bytes + packed_row]
-            )
+        raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, packed_row)
     elif pdt == 1:  # Gray — 8-bit grayscale
         color_type = 0
         bit_depth = 8
-        out = bytearray()
-        for y in range(height):
-            out.extend(
-                full_buf[y * pixel_row_bytes:y * pixel_row_bytes + width]
-            )
+        raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, width)
     else:  # RGB (2) and others — 8-bit RGB
         color_type = 2
         bit_depth = 8
-        rgb_row_bytes = width * 3
         if nc > 3:
-            # Strip extra channels (e.g. RGBX → RGB)
-            out = bytearray()
-            for y in range(height):
-                row_start = y * pixel_row_bytes
-                for x in range(width):
-                    off = row_start + x * nc
-                    out.extend(full_buf[off:off + 3])
+            # Strip extra channels (e.g. RGBX → RGB) via C extension
+            raw_pixels = strip_alpha(bytes(full_buf), width, height, nc)
         else:
-            out = bytearray()
-            for y in range(height):
-                out.extend(
-                    full_buf[y * pixel_row_bytes:y * pixel_row_bytes + rgb_row_bytes]
-                )
+            rgb_row_bytes = width * 3
+            raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, rgb_row_bytes)
 
-    return bytes(out), width, height, color_type, bit_depth
+    return raw_pixels, width, height, color_type, bit_depth
 
 
 def _run_until(

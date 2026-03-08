@@ -31,14 +31,18 @@ Scanlib is a multiplatform document scanning library. It provides a unified Pyth
 
 ### C accelerator extension (`_scanlib_accel`)
 
-A required CPython C extension provides the performance-critical functions:
+A required CPython C++ extension provides the performance-critical functions:
 
-- **`encode_jpeg`** — JPEG encoding via vendored `stb_image_write.h` (public domain). Always produces 3-component YCbCr output, even for grayscale input.
+- **`encode_jpeg`** — JPEG encoding via vendored `toojpeg` (zlib license). Supports true 1-component grayscale and 4:2:0 chroma subsampling for RGB. Used as fallback when libjpeg-turbo is unavailable.
 - **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
 - **`gray_to_bw`** — grayscale to 1-bit packed conversion (threshold at 128)
 - **`trim_rows`** — removes row padding from raw scan data
 
-The extension is built from `src/_scanlib_accel.c` which includes `src/stb_image_write.h`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
+The extension is built from `src/accel/_scanlib_accel.cpp` and `src/accel/toojpeg.cpp`. Build configuration is in `setup.py`. The GIL is released during computation in all functions. Thread safety for the toojpeg callback (which has no context parameter) is handled via `thread_local` storage.
+
+### JPEG acceleration (`_jpeg.py`)
+
+`_jpeg.py` provides a unified `encode_jpeg()` that tries libjpeg-turbo (via ctypes to `libturbojpeg`) at import time and falls back to `_scanlib_accel.encode_jpeg` (toojpeg). The TurboJPEG path is ~16x faster due to SIMD. Library search uses `ctypes.util.find_library("turbojpeg")` plus platform-specific fallback paths. The module exposes `has_turbo: bool` to check which backend is active.
 
 ### Backend selection and thread dispatch
 
@@ -85,5 +89,5 @@ Key implementation details:
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- JPEG encoding and pixel conversion are in the C extension `_scanlib_accel`; PDF assembly and the PNG path use stdlib (`zlib`)
+- JPEG encoding goes through `_jpeg.py` (libjpeg-turbo if available, toojpeg fallback); pixel conversion is in `_scanlib_accel`; PDF assembly and the PNG path use stdlib (`zlib`)
 - `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, and shared utilities (`check_progress`, `MM_PER_INCH`)

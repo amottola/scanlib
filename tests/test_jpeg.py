@@ -1,10 +1,10 @@
-"""Tests for the JPEG encoder (C extension via stb_image_write)."""
+"""Tests for the JPEG encoder (turbo / toojpeg fallback)."""
 
 from __future__ import annotations
 
 import pytest
 
-from _scanlib_accel import encode_jpeg
+from scanlib._jpeg import encode_jpeg
 
 
 def _solid_gray(width: int, height: int, value: int = 128) -> bytes:
@@ -118,7 +118,7 @@ class TestJpegSof:
         assert precision == 8
         assert w == 32
         assert h == 24
-        assert ncomp == 3  # stb always produces 3-component JPEG
+        assert ncomp == 1
 
     def test_rgb_sof0(self):
         data = encode_jpeg(_solid_rgb(48, 32), 48, 32, 2, 85)
@@ -131,3 +131,17 @@ class TestJpegSof:
         assert w == 48
         assert h == 32
         assert ncomp == 3
+
+
+class TestJpegFallback:
+    """Test that toojpeg fallback works when turbo is unavailable."""
+
+    def test_toojpeg_fallback(self):
+        from _scanlib_accel import encode_jpeg as toojpeg_encode
+        data = toojpeg_encode(_solid_rgb(16, 16), 16, 16, 2, 85)
+        assert data[:2] == b"\xff\xd8"
+        assert data[-2:] == b"\xff\xd9"
+
+    def test_has_turbo_attribute(self):
+        from scanlib._jpeg import has_turbo
+        assert isinstance(has_turbo, bool)

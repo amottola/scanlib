@@ -5,7 +5,9 @@ from __future__ import annotations
 import zlib
 from collections.abc import Iterator
 
-from _scanlib_accel import encode_jpeg, gray_to_bw, rgb_to_gray
+from _scanlib_accel import gray_to_bw, rgb_to_gray
+
+from ._jpeg import encode_jpeg
 
 from ._types import ColorMode, ImageFormat, ScannedPage
 
@@ -90,10 +92,7 @@ def pages_to_pdf(
             filter_name = "/FlateDecode"
             pdf_bpc = bit_depth
 
-        if image_format == ImageFormat.JPEG:
-            # stb always produces 3-component YCbCr JPEG
-            color_space = "/DeviceRGB"
-        elif color_type == 0:
+        if color_type == 0:
             color_space = "/DeviceGray"
         else:
             color_space = "/DeviceRGB"
