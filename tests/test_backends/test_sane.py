@@ -17,6 +17,7 @@ from scanlib._types import (
 @pytest.fixture(autouse=True)
 def mock_sane():
     """Patch SANE entry-point functions so tests work on any platform."""
+    import scanlib.backends._sane  # ensure module is imported before patching
     with mock.patch("scanlib.backends._sane._init"), \
          mock.patch("scanlib.backends._sane._get_devices") as m_get_devices, \
          mock.patch("scanlib.backends._sane._open_device") as m_open:

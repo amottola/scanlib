@@ -127,26 +127,38 @@ def _bmp_to_raw(bmp_data: bytes) -> tuple[bytes, int, int, int, int]:
     return raw_data, width, height, color_type, bit_depth
 
 
-_WNDPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_long, wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, wintypes.LPARAM
-)
-
-
-def _default_wnd_proc(hwnd, msg, wparam, lparam):
-    return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
-
-
-# prevent garbage collection of the callback
-_wnd_proc_cb = _WNDPROC(_default_wnd_proc)
-
-
 def _create_hidden_window() -> int:
     """Create a minimal hidden Win32 window and return its HWND."""
+    WNDPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_long, wintypes.HWND, ctypes.c_uint,
+        wintypes.WPARAM, wintypes.LPARAM,
+    )
+
+    class WNDCLASS(ctypes.Structure):
+        _fields_ = [
+            ("style", ctypes.c_uint),
+            ("lpfnWndProc", WNDPROC),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", wintypes.HINSTANCE),
+            ("hIcon", wintypes.HICON),
+            ("hCursor", wintypes.HANDLE),
+            ("hbrBackground", wintypes.HBRUSH),
+            ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR),
+        ]
+
+    def default_wnd_proc(hwnd, msg, wparam, lparam):
+        return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
     hinstance = ctypes.windll.kernel32.GetModuleHandleW(None)
     class_name = "ScanlibTwainWindow"
 
-    wc = wintypes.WNDCLASS()
-    wc.lpfnWndProc = _wnd_proc_cb
+    # prevent garbage collection of the callback
+    _create_hidden_window._wnd_proc_cb = WNDPROC(default_wnd_proc)
+
+    wc = WNDCLASS()
+    wc.lpfnWndProc = _create_hidden_window._wnd_proc_cb
     wc.hInstance = hinstance
     wc.lpszClassName = class_name
 
