@@ -1,5 +1,9 @@
 # scanlib
 
+[![Tests](https://github.com/amottola/scanlib/actions/workflows/test.yml/badge.svg)](https://github.com/amottola/scanlib/actions/workflows/test.yml)
+[![Build & Publish](https://github.com/amottola/scanlib/actions/workflows/wheels.yml/badge.svg)](https://github.com/amottola/scanlib/actions/workflows/wheels.yml)
+[![Documentation](https://readthedocs.org/projects/python-scanlib/badge/?version=latest)](https://python-scanlib.readthedocs.io/)
+
 A multiplatform document scanning library for Python.
 
 scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding and pixel conversion are handled by a bundled C extension (using the [toojpeg](https://create.stephan-brumme.com/toojpeg/) library), while PDF assembly uses only the standard library. When [libjpeg-turbo](https://libjpeg-turbo.org/) is installed on the system, JPEG encoding is automatically accelerated via its SIMD-optimized path.
@@ -108,6 +112,10 @@ with scanners[0] as scanner:
 ## Thread Safety
 
 All scanlib operations can be called from any thread. The library internally dispatches to the correct thread for backends that require it (macOS ImageCaptureCore, Windows TWAIN).
+
+## Documentation
+
+Full documentation is available at [python-scanlib.readthedocs.io](https://python-scanlib.readthedocs.io/).
 
 ## About
 
