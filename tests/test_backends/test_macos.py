@@ -1,6 +1,11 @@
+import sys
 from unittest import mock
 
-import ImageCaptureCore
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS only")
+
+ImageCaptureCore = pytest.importorskip("ImageCaptureCore")
 from scanlib._types import ScanSource
 
 
