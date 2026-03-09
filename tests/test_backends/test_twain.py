@@ -169,7 +169,8 @@ class TestTwainBackend:
 
         backend = TwainBackend()
         scanners = backend.list_scanners()
-        backend.open_scanner(scanners[0])
+        with mock.patch("scanlib.backends._twain._create_hidden_window", return_value=0):
+            backend.open_scanner(scanners[0])
 
         assert ScanSource.FLATBED in scanners[0]._sources
         assert ScanSource.FEEDER in scanners[0]._sources
@@ -188,7 +189,8 @@ class TestTwainBackend:
 
         backend = TwainBackend()
         scanners = backend.list_scanners()
-        backend.open_scanner(scanners[0])
+        with mock.patch("scanlib.backends._twain._create_hidden_window", return_value=0):
+            backend.open_scanner(scanners[0])
 
         sizes = scanners[0]._max_page_sizes
         assert ScanSource.FLATBED in sizes
