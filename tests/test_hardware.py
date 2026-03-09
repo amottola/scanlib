@@ -82,7 +82,7 @@ class TestScanHardware:
             assert doc.height > 0
             assert doc.dpi == 300
             assert doc.color_mode == ColorMode.COLOR
-            assert isinstance(doc.scanner, Scanner)
+            assert doc.dpi == 300
 
     @pytest.mark.timeout(120)
     def test_scan_grayscale(self):

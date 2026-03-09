@@ -111,6 +111,32 @@ and returns ``True`` to continue or ``False`` to stop:
        doc = scanner.scan(next_page=prompt_next)
        # doc is a single multi-page PDF
 
+Page-Level Scanning
+-------------------
+
+Use ``scan_pages()`` to receive individual pages as they arrive.
+Each ``ScannedPage`` carries raw pixel data and can be encoded as
+JPEG or PNG for previewing. After reviewing and reordering, assemble
+a PDF with ``build_pdf()``:
+
+.. code-block:: python
+
+   import scanlib
+
+   with scanners[0] as scanner:
+       pages = list(scanner.scan_pages())
+
+   # Preview each page
+   for i, page in enumerate(pages):
+       with open(f"page_{i}.jpg", "wb") as f:
+           f.write(page.to_jpeg())
+
+   # Reorder, filter, then build the final PDF
+   pages.reverse()
+   doc = scanlib.build_pdf(pages, dpi=300)
+   with open("output.pdf", "wb") as f:
+       f.write(doc.data)
+
 Progress Callback
 -----------------
 
@@ -151,6 +177,14 @@ Scanner
    :members:
    :undoc-members:
 
+Scanned Pages
+~~~~~~~~~~~~~
+
+.. autoclass:: scanlib.ScannedPage
+   :members:
+
+.. autofunction:: scanlib.build_pdf
+
 Scan Result
 ~~~~~~~~~~~
 
@@ -185,6 +219,8 @@ Exceptions
 .. autoclass:: scanlib.ScanError
 
 .. autoclass:: scanlib.ScanAborted
+
+.. autoclass:: scanlib.FeederEmptyError
 
 .. autoclass:: scanlib.ScannerNotOpenError
 

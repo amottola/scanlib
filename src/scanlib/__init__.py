@@ -22,10 +22,13 @@ from ._types import (
     ScanOptions,
     ScanSource,
     ScannedDocument,
+    ScannedPage,
+    build_pdf,
 )
 
 __all__ = [
     "list_scanners",
+    "build_pdf",
     "DISCOVERY_TIMEOUT",
     "ColorMode",
     "ImageFormat",
@@ -36,6 +39,7 @@ __all__ = [
     "ScanOptions",
     "ScanSource",
     "ScannedDocument",
+    "ScannedPage",
     "ScanLibError",
     "ScanError",
     "ScanAborted",

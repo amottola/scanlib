@@ -27,7 +27,7 @@ with scanner:
             print(f"  {doc.page_count} page(s) — saved to scan_feeder.pdf")
 
     # -- Flatbed multi-page with user prompts --
-    if ScanSource.FLATBED in scanner.sources or not scanner.sources:
+    elif ScanSource.FLATBED in scanner.sources or not scanner.sources:
         print("\nFlatbed multi-page scan (press Enter for next page, 'q' to stop):")
 
         def next_page(pages_so_far: int) -> bool:

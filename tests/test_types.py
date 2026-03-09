@@ -2,6 +2,7 @@ import pytest
 
 from scanlib._types import (
     ColorMode,
+    ImageFormat,
     PageSize,
     ScanAborted,
     ScanLibError,
@@ -11,6 +12,8 @@ from scanlib._types import (
     ScanOptions,
     ScanSource,
     ScannedDocument,
+    ScannedPage,
+    build_pdf,
 )
 
 
@@ -200,7 +203,6 @@ class TestScanOptions:
 
 class TestScannedDocument:
     def test_creation(self):
-        scanner = Scanner(name="s", vendor=None, model=None, backend="sane")
         doc = ScannedDocument(
             data=b"%PDF-1.4",
             page_count=1,
@@ -208,7 +210,6 @@ class TestScannedDocument:
             height=200,
             dpi=300,
             color_mode=ColorMode.COLOR,
-            scanner=scanner,
         )
         assert doc.data == b"%PDF-1.4"
         assert doc.page_count == 1
@@ -216,7 +217,6 @@ class TestScannedDocument:
         assert doc.height == 200
         assert doc.dpi == 300
         assert doc.color_mode == ColorMode.COLOR
-        assert doc.scanner is scanner
 
 
 class TestScanAborted:
@@ -227,3 +227,115 @@ class TestScanAborted:
 class TestScannerNotOpenError:
     def test_is_scanlib_error(self):
         assert issubclass(ScannerNotOpenError, ScanLibError)
+
+
+def _make_page(width=16, height=16, color_type=2, bit_depth=8):
+    """Create a ScannedPage with deterministic pixel data."""
+    if color_type == 2:
+        channels = 3
+    else:
+        channels = 1
+    data = bytes(
+        [(y * 37 + x * 13) & 0xFF
+         for y in range(height)
+         for x in range(width * channels)]
+    )
+    return ScannedPage(
+        data=data, width=width, height=height,
+        color_type=color_type, bit_depth=bit_depth,
+    )
+
+
+class TestScannedPage:
+    def test_color_mode_rgb(self):
+        page = _make_page(color_type=2)
+        assert page.color_mode == ColorMode.COLOR
+
+    def test_color_mode_gray(self):
+        page = _make_page(color_type=0)
+        assert page.color_mode == ColorMode.GRAY
+
+    def test_to_jpeg_rgb(self):
+        page = _make_page(color_type=2)
+        jpg = page.to_jpeg()
+        assert jpg[:2] == b"\xff\xd8"  # SOI marker
+        assert jpg[-2:] == b"\xff\xd9"  # EOI marker
+
+    def test_to_jpeg_gray(self):
+        page = _make_page(color_type=0)
+        jpg = page.to_jpeg(quality=50)
+        assert jpg[:2] == b"\xff\xd8"
+
+    def test_to_png_rgb(self):
+        page = _make_page(color_type=2)
+        png = page.to_png()
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_to_png_gray(self):
+        page = _make_page(color_type=0)
+        png = page.to_png()
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_to_png_roundtrip(self):
+        """PNG output can be decoded (validate structure)."""
+        import struct, zlib
+        page = _make_page(width=4, height=4, color_type=2)
+        png = page.to_png()
+        # Parse IHDR
+        ihdr_len = struct.unpack(">I", png[8:12])[0]
+        assert png[12:16] == b"IHDR"
+        w, h, bd, ct = struct.unpack(">IIBBBBB", png[16:16 + ihdr_len])[:4]
+        assert w == 4
+        assert h == 4
+        assert bd == 8
+        assert ct == 2
+
+
+class TestScanPages:
+    def test_scan_pages_raises_when_not_open(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        with pytest.raises(ScannerNotOpenError):
+            s.scan_pages()
+
+    def test_scan_pages_yields_pages(self):
+        pages = [_make_page(), _make_page()]
+
+        def scan_pages(self, scanner, options):
+            return iter(pages)
+
+        mock_backend = type("B", (), {
+            "open_scanner": lambda self, s: None,
+            "close_scanner": lambda self, s: None,
+            "scan_pages": scan_pages,
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        with s:
+            result = list(s.scan_pages())
+        assert len(result) == 2
+        assert all(isinstance(p, ScannedPage) for p in result)
+
+
+class TestBuildPdf:
+    def test_basic(self):
+        pages = [_make_page(), _make_page()]
+        doc = build_pdf(pages, dpi=300)
+        assert doc.data[:8] == b"%PDF-1.4"
+        assert doc.page_count == 2
+
+    def test_reordered_pages(self):
+        page_small = _make_page(width=8, height=8)
+        page_large = _make_page(width=32, height=32)
+        doc = build_pdf([page_large, page_small], dpi=300)
+        assert doc.page_count == 2
+        assert doc.width == 32  # first page dimensions
+        assert doc.height == 32
+
+    def test_png_format(self):
+        pages = [_make_page()]
+        doc = build_pdf(pages, image_format=ImageFormat.PNG)
+        assert b"/FlateDecode" in doc.data
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="No pages"):
+            build_pdf([])

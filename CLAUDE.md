@@ -58,14 +58,17 @@ Both macOS and TWAIN backends patch `scanner._backend_impl` on returned Scanner 
 
 1. `list_scanners()` returns lightweight `Scanner` objects (no device session)
 2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources`, `resolutions`, `color_modes`, `max_page_sizes`, `defaults`
-3. `scanner.scan(...)` calls the backend's `scan_pages()` which yields `ScannedPage` objects (raw pixels), then `_pdf.py` converts them into a single PDF
-4. `scanner.close()` releases the session
+3. `scanner.scan(...)` calls `scanner.scan_pages()` which yields `ScannedPage` objects (raw pixels), then `build_pdf()` converts them into a single PDF
+4. `scanner.scan_pages(...)` yields individual `ScannedPage` objects for preview/reordering workflows
+5. `scanner.close()` releases the session
 
 Properties like `sources`, `resolutions`, `color_modes` raise `ScannerNotOpenError` if accessed before `open()`.
 
-### Pages to PDF pipeline
+### ScannedPage and build_pdf
 
-Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper). `_pdf.py` consumes this iterator one page at a time, applies color mode conversion if needed (using `rgb_to_gray`/`gray_to_bw` from `_scanlib_accel`), encodes each page as JPEG (via `encode_jpeg` from `_scanlib_accel`) or PNG (zlib), and writes a minimal PDF 1.4 file. The streaming design means only one page's raw pixels live in memory at a time.
+Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper). Each `ScannedPage` has `to_jpeg(quality)` and `to_png()` methods for encoding, and a `color_mode` property. The public `build_pdf()` function in `_types.py` consumes an iterable of `ScannedPage` objects, applies color mode conversion if needed (using `rgb_to_gray`/`gray_to_bw` from `_scanlib_accel`), encodes each page as JPEG or PNG, and writes a minimal PDF 1.4 file. The streaming design means only one page's raw pixels live in memory at a time.
+
+`scanner.scan()` is a convenience that calls `scan_pages()` + `build_pdf()` internally. For page preview/rearrangement workflows, call `scan_pages()` directly, then `build_pdf()` after reordering.
 
 ### Multi-page scanning
 
@@ -89,5 +92,5 @@ Key implementation details:
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- JPEG encoding goes through `_jpeg.py` (libjpeg-turbo if available, toojpeg fallback); pixel conversion is in `_scanlib_accel`; PDF assembly and the PNG path use stdlib (`zlib`)
-- `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, and shared utilities (`check_progress`, `MM_PER_INCH`)
+- JPEG encoding goes through `_jpeg.py` (libjpeg-turbo if available, toojpeg fallback); pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`) using stdlib `zlib` for the PNG path
+- `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, `build_pdf()`, and shared utilities (`check_progress`, `MM_PER_INCH`)
