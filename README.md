@@ -120,6 +120,8 @@ Full documentation is available at [python-scanlib.readthedocs.io](https://pytho
 
 Created by Angelo Mottola, with the help of [Claude Code](https://claude.ai/code).
 
+This project was started to fill a void in the Python scanning ecosystem, which was very much fragmented. It is also my first experiment in heavily AI-assisted software development (I still hesitate to use the term "vibe" coding), where I mostly did code review and direction.
+
 ## License
 
 MIT
