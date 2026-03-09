@@ -76,7 +76,7 @@ def list_scanners(*, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
     """Return all available scanners on the current platform.
 
     *timeout* controls how long (in seconds) to wait for scanner
-    discovery.  The default is :data:`DISCOVERY_TIMEOUT` (10 s).
+    discovery.  The default is :data:`DISCOVERY_TIMEOUT` (15 s).
 
     The returned :class:`Scanner` objects are lightweight — no device sessions
     are opened.  Use :meth:`Scanner.open` (or the context-manager protocol)

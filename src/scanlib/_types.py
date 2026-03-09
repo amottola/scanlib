@@ -320,7 +320,7 @@ class Scanner:
 
 # --- Backend protocol ---
 
-DISCOVERY_TIMEOUT = 10.0  # seconds for list_scanners()
+DISCOVERY_TIMEOUT = 15.0  # seconds for list_scanners()
 
 
 class ScanBackend(Protocol):

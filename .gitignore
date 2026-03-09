@@ -21,6 +21,9 @@ docs/_build/
 .vscode/
 .idea/
 
+# Examples output
+examples/*.pdf
+
 # OS
 .DS_Store
 Thumbs.db

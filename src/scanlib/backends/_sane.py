@@ -560,34 +560,40 @@ def _parse_color_modes(opts: list[tuple]) -> tuple[list[ColorMode], dict[ColorMo
     return [], {}
 
 
-def _read_defaults(dev: _SaneDevice, opts: list[tuple], sources: list[ScanSource]) -> ScannerDefaults | None:
-    """Read default settings from SANE device options."""
+def _pick_default_dpi(resolutions: list[int]) -> int:
+    """Pick the best default DPI from a list of supported resolutions."""
+    if not resolutions:
+        return 300
+    if 300 in resolutions:
+        return 300
+    # Pick the closest to 300
+    return min(resolutions, key=lambda r: abs(r - 300))
+
+
+def _pick_default_color_mode(modes: list[ColorMode]) -> ColorMode:
+    """Pick the best default color mode from supported modes."""
+    for preferred in (ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW):
+        if preferred in modes:
+            return preferred
+    return ColorMode.COLOR
+
+
+def _read_defaults(
+    resolutions: list[int],
+    color_modes: list[ColorMode],
+    sources: list[ScanSource],
+) -> ScannerDefaults | None:
+    """Synthesize sensible defaults from the device's supported options.
+
+    SANE has no API for "recommended" defaults — some backends (e.g. eSCL)
+    initialise at their minimum settings.  Instead we pick 300 dpi (or the
+    closest available), Color mode if supported, and the first source.
+    """
     try:
-        try:
-            dpi = int(dev.get_option("resolution"))
-        except Exception:
-            dpi = 300
-
-        try:
-            mode_str = str(dev.get_option("mode")).lower()
-            color_mode = _SANE_MODE_TO_COLOR.get(mode_str, ColorMode.COLOR)
-        except Exception:
-            color_mode = ColorMode.COLOR
-
-        source: ScanSource | None = None
-        try:
-            source_str = str(dev.get_option("source")).lower()
-            for pattern, src in _SANE_SOURCE_MAP.items():
-                if pattern in source_str:
-                    source = src
-                    break
-        except Exception:
-            source = sources[0] if sources else None
-
         return ScannerDefaults(
-            dpi=dpi,
-            color_mode=color_mode,
-            source=source,
+            dpi=_pick_default_dpi(resolutions),
+            color_mode=_pick_default_color_mode(color_modes),
+            source=sources[0] if sources else None,
         )
     except Exception:
         return None
@@ -713,6 +719,11 @@ class SaneBackend:
 
         opts = _get_options(dev)
         scanner._sources = _parse_sources(opts)
+        scanner._resolutions = _parse_resolutions(opts)
+        scanner._color_modes, dev._sane_mode_names = _parse_color_modes(opts)
+        scanner._defaults = _read_defaults(
+            scanner._resolutions, scanner._color_modes, scanner._sources,
+        )
 
         for source in scanner._sources:
             try:
@@ -723,10 +734,6 @@ class SaneBackend:
             ps = _parse_max_page_size(source_opts)
             if ps is not None:
                 scanner._max_page_sizes[source] = ps
-
-        scanner._resolutions = _parse_resolutions(opts)
-        scanner._color_modes, dev._sane_mode_names = _parse_color_modes(opts)
-        scanner._defaults = _read_defaults(dev, opts, scanner._sources)
 
     def close_scanner(self, scanner: Scanner) -> None:
         dev = self._handles.pop(scanner.name, None)
