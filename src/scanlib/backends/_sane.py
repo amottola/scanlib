@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import math
+import threading
 from collections import namedtuple
 from collections.abc import Iterator
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 from _scanlib_accel import trim_rows
 
 from .._types import (
+    DISCOVERY_TIMEOUT,
     ColorMode,
     PageSize,
     ScanAborted,
@@ -276,6 +278,10 @@ class _SaneDevice:
         if self._handle is not None:
             _lib.sane_cancel(self._handle)
 
+    def has_option(self, name: str) -> bool:
+        self._build_option_map()
+        return name in self._option_map
+
     def _build_option_map(self) -> None:
         if self._option_map is not None:
             return
@@ -530,20 +536,28 @@ def _parse_resolutions(opts: list[tuple]) -> list[int]:
     return []
 
 
-def _parse_color_modes(opts: list[tuple]) -> list[ColorMode]:
-    """Extract supported color modes from SANE option descriptors."""
+def _parse_color_modes(opts: list[tuple]) -> tuple[list[ColorMode], dict[ColorMode, str]]:
+    """Extract supported color modes from SANE option descriptors.
+
+    Returns ``(modes, sane_names)`` where *sane_names* maps each
+    :class:`ColorMode` to the original string reported by the backend
+    (preserving case).
+    """
     for opt in opts:
         if opt[0] == "mode":
             constraint = opt[7]
             if isinstance(constraint, (list, tuple)):
                 modes: list[ColorMode] = []
+                sane_names: dict[ColorMode, str] = {}
                 for val in constraint:
-                    mapped = _SANE_MODE_TO_COLOR.get(str(val).lower())
+                    sval = str(val)
+                    mapped = _SANE_MODE_TO_COLOR.get(sval.lower())
                     if mapped is not None and mapped not in modes:
                         modes.append(mapped)
-                return modes
+                        sane_names[mapped] = sval
+                return modes, sane_names
             break
-    return []
+    return [], {}
 
 
 def _read_defaults(dev: _SaneDevice, opts: list[tuple], sources: list[ScanSource]) -> ScannerDefaults | None:
@@ -658,8 +672,24 @@ class SaneBackend:
         _init()
         self._handles: dict[str, _SaneDevice] = {}
 
-    def list_scanners(self) -> list[Scanner]:
-        devices = _get_devices()
+    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+        result: list | None = None
+        error: BaseException | None = None
+
+        def _discover():
+            nonlocal result, error
+            try:
+                result = _get_devices()
+            except BaseException as exc:
+                error = exc
+
+        t = threading.Thread(target=_discover, daemon=True)
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            return []
+        if error is not None:
+            raise error
         return [
             Scanner(
                 name=dev_info[0],
@@ -668,7 +698,8 @@ class SaneBackend:
                 backend="sane",
                 _backend_impl=self,
             )
-            for dev_info in devices
+            for dev_info in (result or [])
+            if "scanner" in dev_info[3].lower()
         ]
 
     def open_scanner(self, scanner: Scanner) -> None:
@@ -694,7 +725,7 @@ class SaneBackend:
                 scanner._max_page_sizes[source] = ps
 
         scanner._resolutions = _parse_resolutions(opts)
-        scanner._color_modes = _parse_color_modes(opts)
+        scanner._color_modes, dev._sane_mode_names = _parse_color_modes(opts)
         scanner._defaults = _read_defaults(dev, opts, scanner._sources)
 
     def close_scanner(self, scanner: Scanner) -> None:
@@ -708,26 +739,40 @@ class SaneBackend:
             raise ScanError("Scanner is not open")
 
         try:
-            dev.set_option("mode", _COLOR_MODE_MAP.get(options.color_mode, options.color_mode.value))
-            dev.set_option("resolution", options.dpi)
+            if dev.has_option("mode"):
+                sane_mode_names = getattr(dev, "_sane_mode_names", {})
+                mode_str = sane_mode_names.get(
+                    options.color_mode,
+                    _COLOR_MODE_MAP.get(options.color_mode, options.color_mode.value),
+                )
+                dev.set_option("mode", mode_str)
+            if dev.has_option("resolution"):
+                dev.set_option("resolution", options.dpi)
 
-            if options.source is not None:
+            if options.source is not None and dev.has_option("source"):
                 dev.set_option(
                     "source",
                     _SCAN_SOURCE_TO_SANE.get(options.source, options.source.value),
                 )
 
             if options.page_size is not None:
-                dev.set_option("br-x", options.page_size.width / 10.0)
-                dev.set_option("br-y", options.page_size.height / 10.0)
-
-            check_progress(options.progress, 0)
+                try:
+                    if dev.has_option("br-x"):
+                        dev.set_option("br-x", options.page_size.width / 10.0)
+                    if dev.has_option("br-y"):
+                        dev.set_option("br-y", options.page_size.height / 10.0)
+                except ScanError:
+                    pass  # scanner may use different units (e.g. pixels)
 
             is_feeder = options.source == ScanSource.FEEDER
             page_count = 0
+            scan_started = False
+
+            check_progress(options.progress, 0)
 
             while True:
                 try:
+                    scan_started = True
                     page = _scan_one_page(dev, progress=options.progress)
                 except ScanError as exc:
                     msg = str(exc).lower()
@@ -752,7 +797,8 @@ class SaneBackend:
 
             check_progress(options.progress, 100)
         except ScanAborted:
-            dev.cancel()
+            if scan_started:
+                dev.cancel()
             raise
         except ScanError:
             raise

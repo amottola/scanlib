@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from ._types import (
+    DISCOVERY_TIMEOUT,
     BackendNotAvailableError,
     ColorMode,
     ImageFormat,
@@ -24,6 +25,7 @@ from ._types import (
 
 __all__ = [
     "list_scanners",
+    "DISCOVERY_TIMEOUT",
     "ColorMode",
     "ImageFormat",
     "PageSize",
@@ -70,11 +72,14 @@ def _get_backend() -> ScanBackend:
     return _backend
 
 
-def list_scanners() -> list[Scanner]:
+def list_scanners(*, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
     """Return all available scanners on the current platform.
+
+    *timeout* controls how long (in seconds) to wait for scanner
+    discovery.  The default is :data:`DISCOVERY_TIMEOUT` (10 s).
 
     The returned :class:`Scanner` objects are lightweight — no device sessions
     are opened.  Use :meth:`Scanner.open` (or the context-manager protocol)
     to start a session before scanning.
     """
-    return _get_backend().list_scanners()
+    return _get_backend().list_scanners(timeout=timeout)

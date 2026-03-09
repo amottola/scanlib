@@ -320,11 +320,13 @@ class Scanner:
 
 # --- Backend protocol ---
 
+DISCOVERY_TIMEOUT = 10.0  # seconds for list_scanners()
+
 
 class ScanBackend(Protocol):
     """Interface that all platform backends must implement."""
 
-    def list_scanners(self) -> list[Scanner]: ...
+    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]: ...
 
     def open_scanner(self, scanner: Scanner) -> None: ...
 

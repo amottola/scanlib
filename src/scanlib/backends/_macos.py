@@ -14,6 +14,7 @@ from Foundation import (
 )
 
 from .._types import (
+    DISCOVERY_TIMEOUT,
     MM_PER_INCH,
     ColorMode,
     PageSize,
@@ -391,9 +392,9 @@ class MacOSBackend:
             raise invoker.error
         return invoker.result
 
-    def list_scanners(self) -> list[Scanner]:
+    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
         with self._lock:
-            scanners = self._call(self._list_scanners_impl)
+            scanners = self._call(self._list_scanners_impl, timeout)
         for s in scanners:
             s._backend_impl = self
         return scanners
@@ -411,11 +412,11 @@ class MacOSBackend:
             pages = self._call(self._scan_pages_impl, scanner, options)
         yield from pages
 
-    def _list_scanners_impl(self) -> list[Scanner]:
+    def _list_scanners_impl(self, timeout: float) -> list[Scanner]:
         delegate = self._ensure_browser()
 
         if not delegate._done:
-            _run_until(delegate, timeout=5.0)
+            _run_until(delegate, timeout=timeout)
 
         # Purge removed devices
         for removed_dev in delegate._removed:

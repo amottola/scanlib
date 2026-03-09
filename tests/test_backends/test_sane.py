@@ -68,7 +68,7 @@ def _setup_scan(dev, width, height, pixel_data, frame=1, depth=8):
 def _open_scanner(backend, mock_sane, mock_dev, name="s:1"):
     """Helper: list scanners, then open the first one."""
     mock_sane.get_devices.return_value = [
-        (name, "V", "M", "t"),
+        (name, "V", "M", "scanner"),
     ]
     mock_sane.open.return_value = mock_dev
     scanners = backend.list_scanners()
@@ -139,7 +139,7 @@ class TestSaneBackend:
 
     def test_open_scanner_max_page_sizes_empty_without_options(self, mock_sane):
         mock_dev = _make_mock_dev()
-        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
         mock_sane.open.return_value = mock_dev
 
         backend = _make_backend()
@@ -150,7 +150,7 @@ class TestSaneBackend:
 
     def test_close_scanner(self, mock_sane):
         mock_dev = _make_mock_dev()
-        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
         mock_sane.open.return_value = mock_dev
 
         backend = _make_backend()
@@ -179,7 +179,7 @@ class TestSaneBackend:
         assert len(pages[0].data) == 100 * 200 * 3
 
     def test_scan_pages_not_open_raises(self, mock_sane):
-        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
 
         backend = _make_backend()
         scanners = backend.list_scanners()
@@ -258,7 +258,7 @@ class TestSaneBackend:
             list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: False)))
 
         mock_dev.start.assert_not_called()
-        mock_dev.cancel.assert_called()
+        mock_dev.cancel.assert_not_called()
 
     def test_scan_pages_progress_called(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -429,7 +429,7 @@ class TestSaneBackend:
             "mode": "color",
         }.get(name)
 
-        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
         mock_sane.open.return_value = mock_dev
 
         backend = _make_backend()
@@ -445,7 +445,7 @@ class TestSaneBackend:
         mock_dev = _make_mock_dev()
         mock_dev.get_option.side_effect = Exception("not supported")
 
-        mock_sane.get_devices.return_value = [("s:1", "V", "M", "t")]
+        mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
         mock_sane.open.return_value = mock_dev
 
         backend = _make_backend()

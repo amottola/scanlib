@@ -11,6 +11,7 @@ from collections.abc import Iterator
 import twain
 
 from .._types import (
+    DISCOVERY_TIMEOUT,
     MM_PER_INCH,
     ColorMode,
     PageSize,
@@ -260,8 +261,15 @@ class TwainBackend:
             raise box["error"]
         return box.get("value")
 
-    def list_scanners(self) -> list[Scanner]:
-        scanners = self._dispatch(self._list_scanners_impl)
+    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+        event = threading.Event()
+        box: dict = {}
+        self._queue.put((self._list_scanners_impl, (), event, box))
+        if not event.wait(timeout):
+            return []
+        if "error" in box:
+            raise box["error"]
+        scanners = box.get("value", [])
         for s in scanners:
             s._backend_impl = self
         return scanners
