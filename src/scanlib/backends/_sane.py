@@ -15,6 +15,7 @@ from _scanlib_accel import trim_rows
 from .._types import (
     DISCOVERY_TIMEOUT,
     ColorMode,
+    FeederEmptyError,
     PageSize,
     ScanAborted,
     ScanError,
@@ -489,19 +490,27 @@ def _get_options(dev: _SaneDevice) -> list[tuple]:
     return [opt for opt in opts if isinstance(opt, tuple) and len(opt) >= 8]
 
 
-def _parse_sources(opts: list[tuple]) -> list[ScanSource]:
+def _parse_sources(opts: list[tuple]) -> tuple[list[ScanSource], dict[ScanSource, str]]:
+    """Extract supported sources from SANE option descriptors.
+
+    Returns ``(sources, sane_names)`` where *sane_names* maps each
+    :class:`ScanSource` to the original string reported by the backend.
+    """
     for opt in opts:
         if opt[0] == "source":
             constraint = opt[7]
             if isinstance(constraint, (list, tuple)):
                 sources: list[ScanSource] = []
+                sane_names: dict[ScanSource, str] = {}
                 for value in constraint:
-                    key = str(value).lower()
+                    sval = str(value)
+                    key = sval.lower()
                     for pattern, source in _SANE_SOURCE_MAP.items():
                         if pattern in key and source not in sources:
                             sources.append(source)
-                return sources
-    return []
+                            sane_names[source] = sval
+                return sources, sane_names
+    return [], {}
 
 
 def _parse_max_page_size(opts: list[tuple]) -> PageSize | None:
@@ -718,7 +727,7 @@ class SaneBackend:
         self._handles[scanner.name] = dev
 
         opts = _get_options(dev)
-        scanner._sources = _parse_sources(opts)
+        scanner._sources, dev._sane_source_names = _parse_sources(opts)
         scanner._resolutions = _parse_resolutions(opts)
         scanner._color_modes, dev._sane_mode_names = _parse_color_modes(opts)
         scanner._defaults = _read_defaults(
@@ -727,7 +736,10 @@ class SaneBackend:
 
         for source in scanner._sources:
             try:
-                dev.set_option("source", _SCAN_SOURCE_TO_SANE.get(source, source.value))
+                source_str = dev._sane_source_names.get(
+                    source, _SCAN_SOURCE_TO_SANE.get(source, source.value),
+                )
+                dev.set_option("source", source_str)
             except Exception:
                 pass
             source_opts = _get_options(dev)
@@ -757,10 +769,12 @@ class SaneBackend:
                 dev.set_option("resolution", options.dpi)
 
             if options.source is not None and dev.has_option("source"):
-                dev.set_option(
-                    "source",
+                sane_source_names = getattr(dev, "_sane_source_names", {})
+                source_str = sane_source_names.get(
+                    options.source,
                     _SCAN_SOURCE_TO_SANE.get(options.source, options.source.value),
                 )
+                dev.set_option("source", source_str)
 
             if options.page_size is not None:
                 try:
@@ -783,9 +797,7 @@ class SaneBackend:
                     page = _scan_one_page(dev, progress=options.progress)
                 except ScanError as exc:
                     msg = str(exc).lower()
-                    if is_feeder and page_count > 0 and (
-                        "no docs" in msg or "eof" in msg
-                    ):
+                    if is_feeder and ("no docs" in msg or "eof" in msg):
                         break
                     if "cancel" in msg or "jammed" in msg:
                         raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
@@ -800,6 +812,8 @@ class SaneBackend:
                     break
 
             if page_count == 0:
+                if is_feeder:
+                    raise FeederEmptyError("No documents in feeder")
                 raise ScanError("No pages were scanned")
 
             check_progress(options.progress, 100)

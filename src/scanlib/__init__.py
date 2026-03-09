@@ -8,6 +8,7 @@ from ._types import (
     DISCOVERY_TIMEOUT,
     BackendNotAvailableError,
     ColorMode,
+    FeederEmptyError,
     ImageFormat,
     NoScannerFoundError,
     PageSize,
@@ -38,6 +39,7 @@ __all__ = [
     "ScanLibError",
     "ScanError",
     "ScanAborted",
+    "FeederEmptyError",
     "NoScannerFoundError",
     "BackendNotAvailableError",
 ]

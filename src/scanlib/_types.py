@@ -29,6 +29,10 @@ class BackendNotAvailableError(ScanLibError):
     """The scanning backend for this platform is not installed."""
 
 
+class FeederEmptyError(ScanError):
+    """The document feeder has no pages to scan."""
+
+
 class ScannerNotOpenError(ScanLibError):
     """Operation requires an open scanner session."""
 

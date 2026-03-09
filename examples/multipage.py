@@ -1,7 +1,7 @@
 """Multi-page scanning — from a document feeder or flatbed with prompts."""
 
 import scanlib
-from scanlib import ScanSource
+from scanlib import FeederEmptyError, ScanSource
 
 scanners = scanlib.list_scanners()
 if not scanners:
@@ -17,10 +17,14 @@ with scanner:
     # -- Automatic document feeder (ADF) --
     if ScanSource.FEEDER in scanner.sources:
         print("\nScanning all pages from the document feeder...")
-        doc = scanner.scan(source=ScanSource.FEEDER)
-        with open("scan_feeder.pdf", "wb") as f:
-            f.write(doc.data)
-        print(f"  {doc.page_count} page(s) — saved to scan_feeder.pdf")
+        try:
+            doc = scanner.scan(source=ScanSource.FEEDER)
+        except FeederEmptyError:
+            print("  No documents in feeder — skipping.")
+        else:
+            with open("scan_feeder.pdf", "wb") as f:
+                f.write(doc.data)
+            print(f"  {doc.page_count} page(s) — saved to scan_feeder.pdf")
 
     # -- Flatbed multi-page with user prompts --
     if ScanSource.FLATBED in scanner.sources or not scanner.sources:

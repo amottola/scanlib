@@ -14,6 +14,7 @@ from .._types import (
     DISCOVERY_TIMEOUT,
     MM_PER_INCH,
     ColorMode,
+    FeederEmptyError,
     PageSize,
     ScanAborted,
     ScanError,
@@ -390,6 +391,8 @@ class TwainBackend:
                     msg = str(exc).lower()
                     if "cancel" in msg or "abort" in msg:
                         raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
+                    if is_feeder and not pages:
+                        raise FeederEmptyError("No documents in feeder") from exc
                     raise
 
                 bmp_data = twain.dib_to_bm_file(native_handle)

@@ -17,6 +17,7 @@ from .._types import (
     DISCOVERY_TIMEOUT,
     MM_PER_INCH,
     ColorMode,
+    FeederEmptyError,
     PageSize,
     ScanAborted,
     ScanError,
@@ -694,6 +695,8 @@ class MacOSBackend:
                     scan_delegate._finish_page()
 
                 if not scan_delegate.completed_pages:
+                    if is_feeder:
+                        raise FeederEmptyError("No documents in feeder")
                     raise ScanError(
                         "Scan completed but no image data was received"
                     )
