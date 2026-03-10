@@ -31,7 +31,7 @@ Scanlib is a multiplatform document scanning library. It provides a unified Pyth
 
 ### C accelerator extension (`_scanlib_accel`)
 
-A required CPython C++ extension provides pixel conversion and BMP parsing:
+A required CPython C extension provides pixel conversion and BMP parsing:
 
 - **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
 - **`rgb_to_bgr`** — RGB to BGR channel swap (used by WIC encoder on Windows)
@@ -40,7 +40,7 @@ A required CPython C++ extension provides pixel conversion and BMP parsing:
 - **`rotate_pixels`** — clockwise pixel rotation (90°/180°/270°) for 8-bit grayscale, RGB, and 1-bit BW
 - **`bmp_to_raw`** — BMP file to raw pixel conversion (handles 1/8/24/32-bit BMPs, BGR→RGB swap, bottom-up reordering)
 
-The extension is built from `src/accel/_scanlib_accel.cpp`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
+The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
 
 ### Page encoding (`_jpeg.py` and `_types.py`)
 
@@ -107,7 +107,7 @@ Key interfaces:
 - **`IWiaTransfer`** — `Download()` initiates a blocking scan that invokes callbacks
 - **`IWiaTransferCallback`** — implemented as a `comtypes.COMObject`; `TransferCallback` receives progress (`lPercentComplete` 0-100), `GetNextStream` is called once per page to provide a memory-backed `IStream` (via `CreateStreamOnHGlobal`)
 
-Transfer flow: `Download()` blocks while invoking `GetNextStream` (once per page) and `TransferCallback` (progress + end-of-stream signals). On `END_OF_STREAM`, the BMP data is read from the `IStream` via `GetHGlobalFromStream` and converted to raw pixels using `_bmp_to_raw` from the C++ accelerator extension. BMP format is used for maximum device compatibility.
+Transfer flow: `Download()` blocks while invoking `GetNextStream` (once per page) and `TransferCallback` (progress + end-of-stream signals). On `END_OF_STREAM`, the BMP data is read from the `IStream` via `GetHGlobalFromStream` and converted to raw pixels using `_bmp_to_raw` from the C accelerator extension. BMP format is used for maximum device compatibility.
 
 The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `ctypes.windll`) with try/except and provides stubs so it can be imported on non-Windows for testing.
 

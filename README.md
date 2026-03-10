@@ -14,7 +14,7 @@ scanlib provides a unified API for document scanning across Windows, macOS, and 
 pip install scanlib
 ```
 
-**Python 3.9** or later is required. Pre-built wheels are available for all major platforms. When installing from source, a C++11 compiler is needed to build the bundled accelerator extension.
+**Python 3.9** or later is required. Pre-built wheels are available for all major platforms. When installing from source, a C compiler is needed to build the bundled accelerator extension.
 
 Platform backends and their Python bindings are installed automatically by pip:
 
