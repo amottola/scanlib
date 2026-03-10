@@ -311,6 +311,181 @@ static PyObject *py_strip_alpha(PyObject * /*self*/, PyObject *args) {
 }
 
 /* ------------------------------------------------------------------ */
+/* bmp_to_raw                                                         */
+/* ------------------------------------------------------------------ */
+
+static PyObject *py_bmp_to_raw(PyObject * /*self*/, PyObject *args) {
+    Py_buffer data;
+
+    if (!PyArg_ParseTuple(args, "y*", &data))
+        return nullptr;
+
+    const auto *buf = static_cast<const unsigned char *>(data.buf);
+    Py_ssize_t buf_len = data.len;
+
+    /* Validate BMP signature */
+    if (buf_len < 54 || buf[0] != 'B' || buf[1] != 'M') {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "Invalid BMP data");
+        return nullptr;
+    }
+
+    /* Parse BMP file header */
+    unsigned int data_offset;
+    std::memcpy(&data_offset, buf + 10, 4);
+
+    /* Parse DIB header */
+    unsigned int header_size;
+    std::memcpy(&header_size, buf + 14, 4);
+
+    if (header_size < 40) {
+        PyBuffer_Release(&data);
+        PyErr_Format(PyExc_ValueError,
+                     "Unsupported BMP header size: %u", header_size);
+        return nullptr;
+    }
+
+    int bmp_width;
+    int bmp_height_signed;
+    std::memcpy(&bmp_width, buf + 18, 4);
+    std::memcpy(&bmp_height_signed, buf + 22, 4);
+
+    unsigned short bits_per_pixel;
+    std::memcpy(&bits_per_pixel, buf + 28, 2);
+
+    bool bottom_up = bmp_height_signed > 0;
+    int height = bottom_up ? bmp_height_signed : -bmp_height_signed;
+    int width = bmp_width;
+
+    if (width <= 0 || height <= 0) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "Invalid BMP dimensions");
+        return nullptr;
+    }
+
+    int color_type, bit_depth, channels;
+    if (bits_per_pixel == 24) {
+        color_type = 2;  /* RGB */
+        channels = 3;
+        bit_depth = 8;
+    } else if (bits_per_pixel == 32) {
+        color_type = 6;  /* RGBA */
+        channels = 4;
+        bit_depth = 8;
+    } else if (bits_per_pixel == 8) {
+        color_type = 0;  /* Grayscale */
+        channels = 1;
+        bit_depth = 8;
+    } else if (bits_per_pixel == 1) {
+        color_type = 0;  /* Grayscale 1-bit */
+        channels = 0;    /* special handling */
+        bit_depth = 1;
+    } else {
+        PyBuffer_Release(&data);
+        PyErr_Format(PyExc_ValueError,
+                     "Unsupported BMP bit depth: %u", bits_per_pixel);
+        return nullptr;
+    }
+
+    const unsigned char *pixel_data = buf + data_offset;
+
+    PyObject *result = nullptr;
+
+    if (bits_per_pixel == 1) {
+        /* 1-bit BMP: rows are bit-packed, padded to 4 bytes */
+        unsigned int palette_offset = 14 + header_size;
+        if (static_cast<Py_ssize_t>(palette_offset + 8) > buf_len) {
+            PyBuffer_Release(&data);
+            PyErr_SetString(PyExc_ValueError, "Invalid BMP: palette truncated");
+            return nullptr;
+        }
+        unsigned char pal_0 = buf[palette_offset];       /* blue of entry 0 */
+        unsigned char pal_1 = buf[palette_offset + 4];   /* blue of entry 1 */
+        bool invert = pal_0 > pal_1;
+
+        int bmp_row_size = ((width + 31) / 32) * 4;
+        int png_row_bytes = (width + 7) / 8;
+        Py_ssize_t out_len = static_cast<Py_ssize_t>(png_row_bytes) * height;
+
+        result = PyBytes_FromStringAndSize(nullptr, out_len);
+        if (!result) {
+            PyBuffer_Release(&data);
+            return nullptr;
+        }
+        auto *dst = reinterpret_cast<unsigned char *>(PyBytes_AS_STRING(result));
+
+        Py_BEGIN_ALLOW_THREADS
+        for (int y = 0; y < height; y++) {
+            int src_y = bottom_up ? (height - 1 - y) : y;
+            const unsigned char *row_src = pixel_data +
+                static_cast<Py_ssize_t>(src_y) * bmp_row_size;
+            unsigned char *row_dst = dst +
+                static_cast<Py_ssize_t>(y) * png_row_bytes;
+            std::memcpy(row_dst, row_src, static_cast<size_t>(png_row_bytes));
+            if (invert) {
+                for (int i = 0; i < png_row_bytes; i++)
+                    row_dst[i] ^= 0xFF;
+            }
+            /* Mask unused trailing bits in last byte */
+            int remainder = width % 8;
+            if (remainder)
+                row_dst[png_row_bytes - 1] &=
+                    static_cast<unsigned char>((0xFF << (8 - remainder)) & 0xFF);
+        }
+        Py_END_ALLOW_THREADS
+    } else {
+        /* 8/24/32-bit BMP */
+        int bmp_row_size = (width * channels + 3) & ~3;
+        Py_ssize_t out_len = static_cast<Py_ssize_t>(width) * height * channels;
+
+        result = PyBytes_FromStringAndSize(nullptr, out_len);
+        if (!result) {
+            PyBuffer_Release(&data);
+            return nullptr;
+        }
+        auto *dst = reinterpret_cast<unsigned char *>(PyBytes_AS_STRING(result));
+
+        Py_BEGIN_ALLOW_THREADS
+        for (int y = 0; y < height; y++) {
+            int src_y = bottom_up ? (height - 1 - y) : y;
+            const unsigned char *row_src = pixel_data +
+                static_cast<Py_ssize_t>(src_y) * bmp_row_size;
+            unsigned char *row_dst = dst +
+                static_cast<Py_ssize_t>(y) * width * channels;
+
+            std::memcpy(row_dst, row_src,
+                        static_cast<size_t>(width * channels));
+
+            /* BGR(A) -> RGB(A) swap */
+            if (channels >= 3) {
+                for (int x = 0; x < width; x++) {
+                    int i = x * channels;
+                    unsigned char tmp = row_dst[i];
+                    row_dst[i] = row_dst[i + 2];
+                    row_dst[i + 2] = tmp;
+                }
+            }
+        }
+        Py_END_ALLOW_THREADS
+    }
+
+    PyBuffer_Release(&data);
+
+    /* Return (raw_bytes, width, height, color_type, bit_depth) */
+    PyObject *tuple = PyTuple_New(5);
+    if (!tuple) {
+        Py_DECREF(result);
+        return nullptr;
+    }
+    PyTuple_SET_ITEM(tuple, 0, result);
+    PyTuple_SET_ITEM(tuple, 1, PyLong_FromLong(width));
+    PyTuple_SET_ITEM(tuple, 2, PyLong_FromLong(height));
+    PyTuple_SET_ITEM(tuple, 3, PyLong_FromLong(color_type));
+    PyTuple_SET_ITEM(tuple, 4, PyLong_FromLong(bit_depth));
+    return tuple;
+}
+
+/* ------------------------------------------------------------------ */
 /* Module definition                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -330,6 +505,10 @@ static PyMethodDef methods[] = {
     {"strip_alpha", py_strip_alpha, METH_VARARGS,
      "strip_alpha(data, width, height, src_channels) -> bytes\n"
      "Strip extra channels from interleaved pixel data (e.g. RGBX -> RGB)."},
+    {"bmp_to_raw", py_bmp_to_raw, METH_VARARGS,
+     "bmp_to_raw(data) -> tuple[bytes, int, int, int, int]\n"
+     "Convert BMP file bytes to raw pixels. Returns "
+     "(raw_data, width, height, color_type, bit_depth)."},
     {nullptr, nullptr, 0, nullptr}
 };
 

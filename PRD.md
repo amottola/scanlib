@@ -2,7 +2,7 @@ We want to create a multiplatform document scanning library in Python, named "sc
 Here are the requirements:
 
 - The library should be backend-based, with each backend based on an existing document scanning library as found on PyPI:
-    - on Windows, use the "twain" library
+    - on Windows, use WIA via the "comtypes" library
     - on macOS, use the "pyobjc-framework-ImageCaptureCore" library
     - on Linux, use the "python-sane" library
 

@@ -68,9 +68,9 @@ def _get_backend() -> ScanBackend:
         _backend = MacOSBackend()
 
     elif sys.platform == "win32":
-        from .backends._twain import TwainBackend
+        from .backends._wia import WiaBackend
 
-        _backend = TwainBackend()
+        _backend = WiaBackend()
 
     else:
         raise BackendNotAvailableError(f"Unsupported platform: {sys.platform}")

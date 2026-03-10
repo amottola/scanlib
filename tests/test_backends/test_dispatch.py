@@ -1,4 +1,4 @@
-"""Tests for the thread dispatch mechanisms in macOS and TWAIN backends."""
+"""Tests for the thread dispatch mechanisms in macOS and WIA backends."""
 
 from __future__ import annotations
 
@@ -8,27 +8,25 @@ import threading
 import pytest
 
 
-class TestTwainDispatch:
-    """Test TwainBackend._dispatch runs functions on the worker thread."""
+class TestWiaDispatch:
+    """Test WiaBackend._dispatch runs functions on the worker thread."""
 
     @pytest.fixture(autouse=True)
-    def mock_twain_module(self):
+    def mock_comtypes(self):
         from unittest import mock
 
-        mock_twain = mock.MagicMock()
-        mock_ctypes = mock.MagicMock()
-        mock_wintypes = mock.MagicMock()
+        mock_ct = mock.MagicMock()
+        mock_ct_client = mock.MagicMock()
         with mock.patch.dict("sys.modules", {
-            "twain": mock_twain,
-            "ctypes": mock_ctypes,
-            "ctypes.wintypes": mock_wintypes,
+            "comtypes": mock_ct,
+            "comtypes.client": mock_ct_client,
         }):
             yield
 
     def _make_backend(self):
-        from scanlib.backends._twain import TwainBackend
+        from scanlib.backends._wia import WiaBackend
 
-        return TwainBackend()
+        return WiaBackend()
 
     def test_dispatch_returns_value(self):
         backend = self._make_backend()

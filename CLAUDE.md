@@ -27,7 +27,7 @@ pip install -e ".[dev]"
 
 ## Architecture
 
-Scanlib is a multiplatform document scanning library. It provides a unified Python API across three platform-native backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), and TWAIN (Windows, pytwain).
+Scanlib is a multiplatform document scanning library. It provides a unified Python API across three platform-native backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), and WIA (Windows, comtypes).
 
 ### C accelerator extension (`_scanlib_accel`)
 
@@ -37,6 +37,7 @@ A required CPython C++ extension provides the performance-critical functions:
 - **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
 - **`gray_to_bw`** — grayscale to 1-bit packed conversion (threshold at 128)
 - **`trim_rows`** — removes row padding from raw scan data
+- **`bmp_to_raw`** — BMP file to raw pixel conversion (handles 1/8/24/32-bit BMPs, BGR→RGB swap, bottom-up reordering)
 
 The extension is built from `src/accel/_scanlib_accel.cpp` and `src/accel/toojpeg.cpp`. Build configuration is in `setup.py`. The GIL is released during computation in all functions. Thread safety for the toojpeg callback (which has no context parameter) is handled via `thread_local` storage.
 
@@ -50,9 +51,9 @@ The extension is built from `src/accel/_scanlib_accel.cpp` and `src/accel/toojpe
 
 - **SANE**: used directly (synchronous ctypes, thread-safe)
 - **macOS**: `MacOSBackend` uses a lock and main-thread dispatch — from the main thread, calls run directly; from a background thread, calls are forwarded via `performSelectorOnMainThread:withObject:waitUntilDone:` (ImageCaptureCore delivers callbacks via the main dispatch queue). Background-thread usage assumes the main thread is running a run loop.
-- **TWAIN**: `TwainBackend` owns a dedicated worker thread with a `queue.Queue` — all calls are marshalled to the worker thread which owns the hidden window handle TWAIN requires
+- **WIA**: `WiaBackend` owns a dedicated STA worker thread with a Win32 message pump (`MsgWaitForMultipleObjects` + `PeekMessage`/`DispatchMessage`) — all calls are marshalled to the worker thread which owns the COM apartment. The message pump is required because WIA COM objects are apartment-threaded and need message processing for COM marshaling. A Win32 event is used to signal work availability to the message loop.
 
-Both macOS and TWAIN backends patch `scanner._backend_impl` on returned Scanner objects so subsequent calls route through the dispatch layer.
+Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner objects so subsequent calls route through the dispatch layer.
 
 ### Scanner lifecycle
 
@@ -72,7 +73,7 @@ Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper).
 
 ### Multi-page scanning
 
-- **Feeder**: backends loop automatically (SANE detects "no docs" error, TWAIN checks `more_pending` flag, macOS receives all pages in one `requestScan()` with page boundaries detected by `dataStartRow` resetting to 0)
+- **Feeder**: backends loop automatically (SANE detects "no docs" error, WIA catches `WIA_ERROR_PAPER_EMPTY` exception, macOS receives all pages in one `requestScan()` with page boundaries detected by `dataStartRow` resetting to 0)
 - **Flatbed multi-page**: the `next_page` callback is called after each page; return `True` to scan another
 
 ### macOS memory-based transfer

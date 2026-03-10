@@ -47,7 +47,7 @@ class TestScanner:
         assert s.is_open is False
 
     def test_optional_fields(self):
-        s = Scanner(name="test", vendor=None, model=None, backend="twain")
+        s = Scanner(name="test", vendor=None, model=None, backend="wia")
         assert s.vendor is None
         assert s.model is None
 

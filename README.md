@@ -22,7 +22,7 @@ Platform backends and their Python bindings are installed automatically by pip:
 |----------|---------|-------------------|--------------------|
 | **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`) |
 | **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
-| **Windows 7+** | TWAIN ([pytwain](https://github.com/denisenkom/pytwain)) | `pytwain` (auto) | *none* |
+| **Windows 10+** | WIA ([comtypes](https://github.com/enthought/comtypes)) | `comtypes` (auto) | *none* |
 
 On macOS, JPEG encoding uses the built-in ImageIO framework automatically.
 On Linux and Windows, install [libjpeg-turbo](https://libjpeg-turbo.org/) for faster JPEG encoding (`apt install libturbojpeg0-dev` on Linux).
@@ -110,7 +110,7 @@ with scanners[0] as scanner:
 
 ## Thread Safety
 
-All scanlib operations can be called from any thread. The library internally dispatches to the correct thread for backends that require it (macOS ImageCaptureCore, Windows TWAIN).
+All scanlib operations can be called from any thread. The library internally dispatches to the correct thread for backends that require it (macOS ImageCaptureCore, Windows WIA).
 
 ## Documentation
 

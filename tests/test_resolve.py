@@ -68,7 +68,7 @@ class TestListScanners:
         try:
             result = scanlib.list_scanners()
         except (OSError, Exception):
-            # Backend may fail to initialise in CI (e.g. missing twaindsm.dll)
+            # Backend may fail to initialise in CI (e.g. WIA unavailable)
             pytest.skip("platform backend unavailable")
         finally:
             scanlib._backend = None

@@ -4,7 +4,7 @@ scanlib
 A multiplatform document scanning library for Python.
 
 scanlib provides a unified API for document scanning across Linux (SANE),
-macOS (ImageCaptureCore), and Windows (TWAIN). It returns scanned documents
+macOS (ImageCaptureCore), and Windows (WIA). It returns scanned documents
 as PDF files and handles platform differences transparently. JPEG encoding
 and pixel conversion are handled by a bundled C++ extension, with optional
 `libjpeg-turbo <https://libjpeg-turbo.org/>`_ acceleration for high-resolution scans.
@@ -25,7 +25,7 @@ Platform backends and their Python bindings are installed automatically by pip:
 - **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes.
   Requires ``libsane`` (``apt install libsane-dev`` / ``dnf install sane-backends``).
 - **macOS 10.7+** — ImageCaptureCore via pyobjc.
-- **Windows 7+** — TWAIN via `pytwain <https://github.com/denisenkom/pytwain>`_.
+- **Windows 10+** — WIA via `comtypes <https://github.com/enthought/comtypes>`_.
 
 On macOS, JPEG encoding uses the built-in ImageIO framework automatically.
 On Linux and Windows, install `libjpeg-turbo <https://libjpeg-turbo.org/>`_
@@ -156,7 +156,7 @@ Thread Safety
 
 All scanlib operations can be called from any thread. The library
 internally dispatches operations to the correct thread for backends that
-require it (macOS ImageCaptureCore, Windows TWAIN).
+require it (macOS ImageCaptureCore, Windows WIA).
 
 Note that ``progress`` and ``next_page`` callbacks may execute on an
 internal thread. If your callbacks update a GUI, dispatch to your UI
