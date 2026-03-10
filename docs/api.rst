@@ -41,7 +41,7 @@ Options & Configuration
    :members:
    :undoc-members:
 
-.. autoclass:: scanlib.PageSize
+.. autoclass:: scanlib.ScanArea
    :members:
 
 .. autoclass:: scanlib.ScannerDefaults

@@ -57,9 +57,10 @@ except ImportError:
 
 from .._types import (
     DISCOVERY_TIMEOUT,
+    MM_PER_INCH,
     ColorMode,
     FeederEmptyError,
-    PageSize,
+    ScanArea,
     ScanAborted,
     ScanError,
     ScannedPage,
@@ -571,14 +572,14 @@ def _read_wia_sources(storage) -> list[ScanSource]:
     return sources
 
 
-def _read_wia_max_page_size(storage) -> PageSize | None:
-    """Read max page size (thousandths of inch -> 1/10mm)."""
+def _read_wia_max_scan_area(storage) -> ScanArea | None:
+    """Read max scan area (thousandths of inch -> 1/10mm)."""
     max_h = _read_prop(storage, _WIA_DPS_MAX_HORIZONTAL_SIZE)
     max_v = _read_prop(storage, _WIA_DPS_MAX_VERTICAL_SIZE)
     if max_h is not None and max_v is not None:
         width = math.ceil(int(max_h) * _MM10_PER_THOUSANDTH_INCH)
         height = math.ceil(int(max_v) * _MM10_PER_THOUSANDTH_INCH)
-        return PageSize(width=width, height=height)
+        return ScanArea(x=0, y=0, width=width, height=height)
     return None
 
 
@@ -865,10 +866,10 @@ class WiaBackend:
         sources: list[ScanSource] = []
         if root_storage is not None:
             sources = _read_wia_sources(root_storage)
-            ps = _read_wia_max_page_size(root_storage)
-            if ps is not None:
+            area = _read_wia_max_scan_area(root_storage)
+            if area is not None:
                 for source in sources:
-                    scanner._max_page_sizes[source] = ps
+                    scanner._max_scan_areas[source] = area
         if not sources:
             sources = [ScanSource.FLATBED]
         scanner._sources = sources
@@ -938,12 +939,16 @@ class WiaBackend:
             if wia_dt is not None:
                 _write_prop(item_storage, _WIA_IPA_DATATYPE, wia_dt)
 
-            # Set scan area
-            if options.page_size is not None:
-                width_px = int(options.page_size.width / 10.0 / 25.4 * options.dpi)
-                height_px = int(options.page_size.height / 10.0 / 25.4 * options.dpi)
-                _write_prop(item_storage, _WIA_IPS_XPOS, 0)
-                _write_prop(item_storage, _WIA_IPS_YPOS, 0)
+            # Set scan area (convert 1/10mm to pixels)
+            if options.scan_area is not None:
+                sa = options.scan_area
+                px_per_mm10 = options.dpi / (MM_PER_INCH * 10)
+                x_px = int(sa.x * px_per_mm10)
+                y_px = int(sa.y * px_per_mm10)
+                width_px = int(sa.width * px_per_mm10)
+                height_px = int(sa.height * px_per_mm10)
+                _write_prop(item_storage, _WIA_IPS_XPOS, x_px)
+                _write_prop(item_storage, _WIA_IPS_YPOS, y_px)
                 _write_prop(item_storage, _WIA_IPS_XEXTENT, width_px)
                 _write_prop(item_storage, _WIA_IPS_YEXTENT, height_px)
 

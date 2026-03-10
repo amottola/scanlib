@@ -5,7 +5,7 @@ import pytest
 
 from scanlib._types import (
     ColorMode,
-    PageSize,
+    ScanArea,
     ScanAborted,
     ScanError,
     Scanner,
@@ -116,7 +116,7 @@ class TestSaneBackend:
         assert ScanSource.FLATBED in scanners[0]._sources
         assert ScanSource.FEEDER in scanners[0]._sources
 
-    def test_open_scanner_parses_max_page_sizes(self, mock_sane):
+    def test_open_scanner_parses_max_scan_area(self, mock_sane):
         mock_dev = _make_mock_dev([
             ("source", "Source", "Scan source", 3, 0, 0, 0,
              ["Flatbed"]),
@@ -132,12 +132,14 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        sizes = scanners[0]._max_page_sizes
-        assert ScanSource.FLATBED in sizes
-        assert sizes[ScanSource.FLATBED].width == 2159
-        assert sizes[ScanSource.FLATBED].height == 2970
+        areas = scanners[0]._max_scan_areas
+        assert ScanSource.FLATBED in areas
+        assert areas[ScanSource.FLATBED].x == 0
+        assert areas[ScanSource.FLATBED].y == 0
+        assert areas[ScanSource.FLATBED].width == 2159
+        assert areas[ScanSource.FLATBED].height == 2970
 
-    def test_open_scanner_max_page_sizes_empty_without_options(self, mock_sane):
+    def test_open_scanner_max_scan_area_empty_without_options(self, mock_sane):
         mock_dev = _make_mock_dev()
         mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
         mock_sane.open.return_value = mock_dev
@@ -146,7 +148,7 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert scanners[0]._max_page_sizes == {}
+        assert scanners[0]._max_scan_areas == {}
 
     def test_close_scanner(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -200,18 +202,35 @@ class TestSaneBackend:
         assert calls["mode"] == "gray"
         assert calls["resolution"] == 600
 
-    def test_scan_pages_sets_page_size(self, mock_sane):
+    def test_scan_pages_sets_scan_area(self, mock_sane):
         mock_dev = _make_mock_dev()
         pixel_data = _make_gray_pixel_data(50, 50)
         _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        list(backend.scan_pages(scanner, ScanOptions(page_size=PageSize(2100, 2970))))
+        list(backend.scan_pages(scanner, ScanOptions(scan_area=ScanArea(0, 0, 2100, 2970))))
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
+        assert calls["tl-x"] == 0.0
+        assert calls["tl-y"] == 0.0
         assert calls["br-x"] == 210.0
         assert calls["br-y"] == 297.0
+
+    def test_scan_pages_sets_scan_area_with_offset(self, mock_sane):
+        mock_dev = _make_mock_dev()
+        pixel_data = _make_gray_pixel_data(50, 50)
+        _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
+        list(backend.scan_pages(scanner, ScanOptions(scan_area=ScanArea(100, 200, 500, 700))))
+
+        calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
+        assert calls["tl-x"] == 10.0
+        assert calls["tl-y"] == 20.0
+        assert calls["br-x"] == 60.0
+        assert calls["br-y"] == 90.0
 
     def test_scan_pages_sets_source(self, mock_sane):
         from scanlib.backends._sane import Parameters
@@ -234,7 +253,7 @@ class TestSaneBackend:
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["source"] == "Automatic Document Feeder"
 
-    def test_scan_pages_no_page_size_skips_setting(self, mock_sane):
+    def test_scan_pages_no_scan_area_skips_setting(self, mock_sane):
         mock_dev = _make_mock_dev()
         pixel_data = _make_gray_pixel_data(50, 50)
         _setup_scan(mock_dev, 50, 50, pixel_data, frame=0)
@@ -244,6 +263,8 @@ class TestSaneBackend:
         list(backend.scan_pages(scanner, ScanOptions()))
 
         option_names = [c.args[0] for c in mock_dev.set_option.call_args_list]
+        assert "tl-x" not in option_names
+        assert "tl-y" not in option_names
         assert "br-x" not in option_names
         assert "br-y" not in option_names
 

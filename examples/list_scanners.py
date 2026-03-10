@@ -23,10 +23,10 @@ for scanner in scanners:
             print(f"    Resolutions:  {scanner.resolutions} dpi")
         if scanner.color_modes:
             print(f"    Color modes:  {[m.value for m in scanner.color_modes]}")
-        if scanner.max_page_sizes:
-            for src, ps in scanner.max_page_sizes.items():
-                w_mm, h_mm = ps.width / 10, ps.height / 10
-                print(f"    Max size ({src.value}): {w_mm:.0f} x {h_mm:.0f} mm")
+        if scanner.max_scan_area:
+            for src, area in scanner.max_scan_area.items():
+                w_mm, h_mm = area.width / 10, area.height / 10
+                print(f"    Max area ({src.value}): {w_mm:.0f} x {h_mm:.0f} mm")
         if scanner.defaults:
             d = scanner.defaults
             src = d.source.value if d.source else "none"

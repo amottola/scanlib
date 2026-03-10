@@ -47,13 +47,13 @@ with open("output.pdf", "wb") as f:
 ## Scan Options
 
 ```python
-from scanlib import ColorMode, PageSize, ScanSource
+from scanlib import ColorMode, ScanArea, ScanSource
 
 with scanners[0] as scanner:
     doc = scanner.scan(
         dpi=600,
         color_mode=ColorMode.GRAY,
-        page_size=PageSize(2100, 2970),  # A4 in 1/10 mm
+        scan_area=ScanArea(0, 0, 2100, 2970),  # full A4 in 1/10 mm
         source=ScanSource.FLATBED,
     )
 ```
@@ -67,7 +67,7 @@ with scanners[0] as scanner:
     print(scanner.sources)        # [ScanSource.FLATBED, ScanSource.FEEDER]
     print(scanner.resolutions)    # [150, 300, 600, 1200]
     print(scanner.color_modes)    # [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
-    print(scanner.max_page_sizes) # {ScanSource.FLATBED: PageSize(2159, 2972)}
+    print(scanner.max_scan_area)  # {ScanSource.FLATBED: ScanArea(x=0, y=0, width=2159, height=2972)}
     print(scanner.defaults)       # ScannerDefaults(dpi=300, ...)
 ```
 

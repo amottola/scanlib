@@ -3,7 +3,7 @@ import pytest
 from scanlib._types import (
     ColorMode,
     ImageFormat,
-    PageSize,
+    ScanArea,
     ScanAborted,
     ScanLibError,
     Scanner,
@@ -30,11 +30,20 @@ class TestScanSource:
         assert ScanSource.FEEDER.value == "feeder"
 
 
-class TestPageSize:
+class TestScanArea:
     def test_creation(self):
-        ps = PageSize(width=2100, height=2970)
-        assert ps.width == 2100
-        assert ps.height == 2970
+        area = ScanArea(x=0, y=0, width=2100, height=2970)
+        assert area.x == 0
+        assert area.y == 0
+        assert area.width == 2100
+        assert area.height == 2970
+
+    def test_with_offsets(self):
+        area = ScanArea(x=100, y=200, width=1000, height=1500)
+        assert area.x == 100
+        assert area.y == 200
+        assert area.width == 1000
+        assert area.height == 1500
 
 
 class TestScanner:
@@ -146,12 +155,12 @@ class TestScanner:
         with s:
             assert s.color_modes == [ColorMode.COLOR, ColorMode.GRAY]
 
-    def test_max_page_sizes_raises_when_not_open(self):
+    def test_max_scan_area_raises_when_not_open(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
         with pytest.raises(ScannerNotOpenError):
-            _ = s.max_page_sizes
+            _ = s.max_scan_area
 
-    def test_max_page_sizes_default_empty(self):
+    def test_max_scan_area_default_empty(self):
         mock_backend = type("B", (), {
             "open_scanner": lambda self, s: None,
             "close_scanner": lambda self, s: None,
@@ -159,7 +168,7 @@ class TestScanner:
         s = Scanner(name="test", vendor=None, model=None, backend="sane",
                     _backend_impl=mock_backend)
         with s:
-            assert s.max_page_sizes == {}
+            assert s.max_scan_area == {}
 
     def test_context_manager(self):
         mock_backend = type("B", (), {
@@ -183,7 +192,7 @@ class TestScanOptions:
         opts = ScanOptions()
         assert opts.dpi == 300
         assert opts.color_mode == ColorMode.COLOR
-        assert opts.page_size is None
+        assert opts.scan_area is None
         assert opts.source is None
         assert opts.progress is None
         assert opts.next_page is None
@@ -192,12 +201,12 @@ class TestScanOptions:
         opts = ScanOptions(
             dpi=600,
             color_mode=ColorMode.GRAY,
-            page_size=PageSize(2100, 2970),
+            scan_area=ScanArea(0, 0, 2100, 2970),
             source=ScanSource.FEEDER,
         )
         assert opts.dpi == 600
         assert opts.color_mode == ColorMode.GRAY
-        assert opts.page_size == PageSize(2100, 2970)
+        assert opts.scan_area == ScanArea(0, 0, 2100, 2970)
         assert opts.source == ScanSource.FEEDER
 
 
@@ -427,10 +436,14 @@ class TestScanPages:
 
     def _open_scanner(self, **caps):
         """Create a mock-opened Scanner with given capabilities."""
+        max_scan_areas = caps.pop("max_scan_areas", None)
+
         def open_scanner(be, s):
             s._resolutions = caps.get("resolutions", [100, 200, 300])
             s._color_modes = caps.get("color_modes", [ColorMode.COLOR, ColorMode.GRAY])
             s._sources = caps.get("sources", [ScanSource.FLATBED])
+            if max_scan_areas is not None:
+                s._max_scan_areas = max_scan_areas
 
         mock_backend = type("B", (), {
             "open_scanner": open_scanner,
@@ -474,6 +487,24 @@ class TestScanPages:
         s = self._open_scanner(sources=[ScanSource.FLATBED])
         with pytest.raises(ValueError, match="Unsupported source"):
             s.scan_pages(source=ScanSource.FEEDER)
+
+    def test_scan_rejects_scan_area_beyond_max(self):
+        s = self._open_scanner(
+            resolutions=[300],
+            color_modes=[ColorMode.COLOR],
+            max_scan_areas={ScanSource.FLATBED: ScanArea(0, 0, 2100, 2970)},
+        )
+        with pytest.raises(ValueError, match="scan_area extends beyond"):
+            s.scan_pages(scan_area=ScanArea(0, 0, 9999, 9999))
+
+    def test_scan_area_within_max_passes(self):
+        s = self._open_scanner(
+            resolutions=[300],
+            color_modes=[ColorMode.COLOR],
+            max_scan_areas={ScanSource.FLATBED: ScanArea(0, 0, 2100, 2970)},
+        )
+        pages = list(s.scan_pages(scan_area=ScanArea(100, 200, 1000, 1500)))
+        assert len(pages) == 1
 
 
 class TestBuildPdf:

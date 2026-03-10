@@ -5,7 +5,7 @@ import pytest
 
 from scanlib._types import (
     ColorMode,
-    PageSize,
+    ScanArea,
     ScanError,
     ScanOptions,
     ScanSource,
@@ -126,7 +126,7 @@ class TestWiaBackend:
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
-    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
                 return_value=[ScanSource.FLATBED, ScanSource.FEEDER])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
@@ -144,12 +144,12 @@ class TestWiaBackend:
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
-    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size",
-                return_value=PageSize(width=2159, height=2970))
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area",
+                return_value=ScanArea(x=0, y=0, width=2159, height=2970))
     @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
                 return_value=[ScanSource.FLATBED])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
-    def test_open_scanner_queries_max_page_sizes(
+    def test_open_scanner_queries_max_scan_area(
         self, _rp, _src, _ps, _res, _cm, _def
     ):
         dm = _make_open_scanner_dm()
@@ -157,16 +157,18 @@ class TestWiaBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        sizes = scanners[0]._max_page_sizes
-        assert ScanSource.FLATBED in sizes
-        assert sizes[ScanSource.FLATBED].width == 2159
-        assert sizes[ScanSource.FLATBED].height == 2970
+        areas = scanners[0]._max_scan_areas
+        assert ScanSource.FLATBED in areas
+        assert areas[ScanSource.FLATBED].x == 0
+        assert areas[ScanSource.FLATBED].y == 0
+        assert areas[ScanSource.FLATBED].width == 2159
+        assert areas[ScanSource.FLATBED].height == 2970
 
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions",
                 return_value=[150, 300, 600])
-    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
                 return_value=[ScanSource.FLATBED])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
@@ -184,7 +186,7 @@ class TestWiaBackend:
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes",
                 return_value=[ColorMode.BW, ColorMode.GRAY, ColorMode.COLOR])
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
-    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
                 return_value=[ScanSource.FLATBED])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)

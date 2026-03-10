@@ -18,7 +18,7 @@ from .._types import (
     MM_PER_INCH,
     ColorMode,
     FeederEmptyError,
-    PageSize,
+    ScanArea,
     ScanAborted,
     ScanError,
     ScannedPage,
@@ -248,13 +248,15 @@ def _run_until(
         )
 
 
-def _page_size_from_fu(fu: object) -> PageSize | None:
+def _scan_area_from_fu(fu: object) -> ScanArea | None:
     """Read physical size from a functional unit, converting to 1/10 mm."""
     physical_size = fu.physicalSize()
     factor = _measurement_factor(fu.measurementUnit())
     if factor is None:
         return None
-    return PageSize(
+    return ScanArea(
+        x=0,
+        y=0,
         width=math.ceil(physical_size.width * factor),
         height=math.ceil(physical_size.height * factor),
     )
@@ -510,11 +512,11 @@ class MacOSBackend:
         try:
             fu = device.selectedFunctionalUnit()
             if fu is not None:
-                ps = _page_size_from_fu(fu)
-                if ps is not None:
+                area = _scan_area_from_fu(fu)
+                if area is not None:
                     fu_source = _ICC_SOURCE_MAP.get(fu.type())
                     if fu_source is not None and fu_source in remaining_sources:
-                        scanner._max_page_sizes[fu_source] = ps
+                        scanner._max_scan_areas[fu_source] = area
                         remaining_sources.discard(fu_source)
         except Exception:
             pass
@@ -546,9 +548,9 @@ class MacOSBackend:
                     )
                 fu = device.selectedFunctionalUnit()
                 if fu is not None and fu.type() == icc_type:
-                    ps = _page_size_from_fu(fu)
-                    if ps is not None:
-                        scanner._max_page_sizes[source] = ps
+                    area = _scan_area_from_fu(fu)
+                    if area is not None:
+                        scanner._max_scan_areas[source] = area
             except Exception:
                 pass
 
@@ -641,13 +643,15 @@ class MacOSBackend:
                 else:
                     fu.setBitDepth_(8)
 
-                if options.page_size is not None:
+                if options.scan_area is not None:
                     factor = _measurement_factor(fu.measurementUnit())
                     if factor is None:
                         factor = MM_PER_INCH * 10
-                    w_val = options.page_size.width / factor
-                    h_val = options.page_size.height / factor
-                    fu.setScanArea_(((0, 0), (w_val, h_val)))
+                    x_val = options.scan_area.x / factor
+                    y_val = options.scan_area.y / factor
+                    w_val = options.scan_area.width / factor
+                    h_val = options.scan_area.height / factor
+                    fu.setScanArea_(((x_val, y_val), (w_val, h_val)))
                 else:
                     phys = fu.physicalSize()
                     fu.setScanArea_(((0, 0), (phys.width, phys.height)))

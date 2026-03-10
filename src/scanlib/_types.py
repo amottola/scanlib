@@ -68,9 +68,15 @@ class ImageFormat(enum.Enum):
 
 
 @dataclass(frozen=True)
-class PageSize:
-    """Page size in 1/10 millimeters."""
+class ScanArea:
+    """Scan region in 1/10 millimeters.
 
+    *x* and *y* are offsets from the top-left corner of the scanner bed.
+    *width* and *height* are the dimensions of the region to scan.
+    """
+
+    x: int
+    y: int
     width: int
     height: int
 
@@ -90,7 +96,7 @@ class ScanOptions:
 
     dpi: int = 300
     color_mode: ColorMode = ColorMode.COLOR
-    page_size: PageSize | None = None
+    scan_area: ScanArea | None = None
     source: ScanSource | None = None
     progress: Callable[[int], bool] | None = None
     next_page: Callable[[int], bool] | None = None
@@ -247,7 +253,7 @@ class Scanner:
         self._backend = backend
         self._backend_impl = _backend_impl
         self._sources: list[ScanSource] = []
-        self._max_page_sizes: dict[ScanSource, PageSize] = {}
+        self._max_scan_areas: dict[ScanSource, ScanArea] = {}
         self._resolutions: list[int] = []
         self._color_modes: list[ColorMode] = []
         self._defaults: ScannerDefaults | None = None
@@ -298,18 +304,19 @@ class Scanner:
         return self._defaults
 
     @property
-    def max_page_sizes(self) -> dict[ScanSource, PageSize]:
-        """Maximum scan area per source as a :class:`PageSize` (1/10 mm).
+    def max_scan_area(self) -> dict[ScanSource, ScanArea]:
+        """Maximum scan area per source as a :class:`ScanArea` (1/10 mm).
 
-        Returns a dict mapping each :class:`ScanSource` to its maximum
-        scan area.  The dict may be empty if the backend could not
-        determine sizes.  Only available after :meth:`open`.
+        Returns a dict mapping each :class:`ScanSource` to a
+        :class:`ScanArea` with ``x=0, y=0`` and the physical maximum
+        width and height.  The dict may be empty if the backend could
+        not determine sizes.  Only available after :meth:`open`.
         """
         if not self._is_open:
             raise ScannerNotOpenError(
-                "Scanner must be opened before querying max page sizes"
+                "Scanner must be opened before querying max scan area"
             )
-        return self._max_page_sizes
+        return self._max_scan_areas
 
     @property
     def resolutions(self) -> list[int]:
@@ -360,7 +367,7 @@ class Scanner:
         *,
         dpi: int = 300,
         color_mode: ColorMode = ColorMode.COLOR,
-        page_size: PageSize | None = None,
+        scan_area: ScanArea | None = None,
         source: ScanSource | None = None,
         progress: Callable[[int], bool] | None = None,
         next_page: Callable[[int], bool] | None = None,
@@ -390,10 +397,28 @@ class Scanner:
                 f"Unsupported source {source.value!r}; "
                 f"scanner supports {[s.value for s in self._sources]}"
             )
+        if scan_area is not None and self._max_scan_areas:
+            resolved = source if source is not None else (
+                self._sources[0] if self._sources else None
+            )
+            if resolved is not None and resolved in self._max_scan_areas:
+                max_area = self._max_scan_areas[resolved]
+                if scan_area.x + scan_area.width > max_area.width:
+                    raise ValueError(
+                        f"scan_area extends beyond scanner width: "
+                        f"x={scan_area.x} + width={scan_area.width} > "
+                        f"max={max_area.width}"
+                    )
+                if scan_area.y + scan_area.height > max_area.height:
+                    raise ValueError(
+                        f"scan_area extends beyond scanner height: "
+                        f"y={scan_area.y} + height={scan_area.height} > "
+                        f"max={max_area.height}"
+                    )
         options = ScanOptions(
             dpi=dpi,
             color_mode=color_mode,
-            page_size=page_size,
+            scan_area=scan_area,
             source=source,
             progress=progress,
             next_page=next_page,
@@ -405,7 +430,7 @@ class Scanner:
         *,
         dpi: int = 300,
         color_mode: ColorMode = ColorMode.COLOR,
-        page_size: PageSize | None = None,
+        scan_area: ScanArea | None = None,
         source: ScanSource | None = None,
         progress: Callable[[int], bool] | None = None,
         next_page: Callable[[int], bool] | None = None,
@@ -434,7 +459,7 @@ class Scanner:
         pages = self.scan_pages(
             dpi=dpi,
             color_mode=color_mode,
-            page_size=page_size,
+            scan_area=scan_area,
             source=source,
             progress=progress,
             next_page=next_page,

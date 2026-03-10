@@ -1,7 +1,7 @@
-"""Demonstrate various scan options: page size, image format, quality, and progress."""
+"""Demonstrate various scan options: scan area, image format, quality, and progress."""
 
 import scanlib
-from scanlib import ColorMode, ImageFormat, PageSize
+from scanlib import ColorMode, ImageFormat, ScanArea
 
 scanners = scanlib.list_scanners()
 if not scanners:
@@ -13,7 +13,7 @@ scanner = scanners[0]
 with scanner:
     print(f"Using: {scanner.name}")
     print(f"Sources: {[s.value for s in scanner.sources]}")
-    print(f"Max page sizes: {scanner.max_page_sizes}")
+    print(f"Max scan areas: {scanner.max_scan_area}")
     if scanner.defaults:
         d = scanner.defaults
         print(f"Defaults: {d.dpi} dpi, {d.color_mode.value}, source={d.source}")
@@ -27,7 +27,7 @@ with scanner:
     doc = scanner.scan(
         dpi=150,
         color_mode=ColorMode.GRAY,
-        page_size=PageSize(2100, 2970),  # A4 in 1/10 mm
+        scan_area=ScanArea(0, 0, 2100, 2970),  # full A4 in 1/10 mm
         progress=on_progress,
     )
     print(f"\n  {doc.width}x{doc.height} px, {len(doc.data):,} bytes")

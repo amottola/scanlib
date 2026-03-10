@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 import scanlib
-from scanlib._types import ColorMode, PageSize, Scanner, ScanSource, ScannedDocument  # noqa: F401
+from scanlib._types import ColorMode, ScanArea, Scanner, ScanSource, ScannedDocument  # noqa: F401
 
 
 def _get_scanners() -> list[Scanner]:
@@ -58,15 +58,17 @@ class TestOpenScanner:
                 assert isinstance(source, ScanSource)
 
     @pytest.mark.timeout(30)
-    def test_open_populates_max_page_sizes(self):
+    def test_open_populates_max_scan_area(self):
         with _scanners[0] as scanner:
-            sizes = scanner.max_page_sizes
-            assert isinstance(sizes, dict)
-            for source, ps in sizes.items():
+            areas = scanner.max_scan_area
+            assert isinstance(areas, dict)
+            for source, area in areas.items():
                 assert isinstance(source, ScanSource)
-                assert isinstance(ps, PageSize)
-                assert ps.width > 0
-                assert ps.height > 0
+                assert isinstance(area, ScanArea)
+                assert area.x == 0
+                assert area.y == 0
+                assert area.width > 0
+                assert area.height > 0
 
 
 @requires_scanner
@@ -112,9 +114,9 @@ class TestScanHardware:
                 scanner.scan(dpi=999)
 
     @pytest.mark.timeout(120)
-    def test_scan_with_page_size(self):
+    def test_scan_with_scan_area(self):
         with _scanners[0] as scanner:
-            doc = scanner.scan(page_size=PageSize(2100, 2970))
+            doc = scanner.scan(scan_area=ScanArea(0, 0, 2100, 2970))
             assert doc.data[:8] == b"%PDF-1.4"
 
     @pytest.mark.timeout(120)

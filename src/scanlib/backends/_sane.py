@@ -16,7 +16,7 @@ from .._types import (
     DISCOVERY_TIMEOUT,
     ColorMode,
     FeederEmptyError,
-    PageSize,
+    ScanArea,
     ScanAborted,
     ScanError,
     ScannedPage,
@@ -513,7 +513,7 @@ def _parse_sources(opts: list[tuple]) -> tuple[list[ScanSource], dict[ScanSource
     return [], {}
 
 
-def _parse_max_page_size(opts: list[tuple]) -> PageSize | None:
+def _parse_max_scan_area(opts: list[tuple]) -> ScanArea | None:
     max_x = max_y = None
     for opt in opts:
         name = opt[0]
@@ -524,7 +524,7 @@ def _parse_max_page_size(opts: list[tuple]) -> PageSize | None:
             max_y = float(constraint[1])
 
     if max_x is not None and max_y is not None:
-        return PageSize(width=math.ceil(max_x * 10), height=math.ceil(max_y * 10))
+        return ScanArea(x=0, y=0, width=math.ceil(max_x * 10), height=math.ceil(max_y * 10))
     return None
 
 
@@ -740,9 +740,9 @@ class SaneBackend:
             except Exception:
                 pass
             source_opts = _get_options(dev)
-            ps = _parse_max_page_size(source_opts)
-            if ps is not None:
-                scanner._max_page_sizes[source] = ps
+            area = _parse_max_scan_area(source_opts)
+            if area is not None:
+                scanner._max_scan_areas[source] = area
 
     def close_scanner(self, scanner: Scanner) -> None:
         dev = self._handles.pop(scanner.name, None)
@@ -773,12 +773,17 @@ class SaneBackend:
                 )
                 dev.set_option("source", source_str)
 
-            if options.page_size is not None:
+            if options.scan_area is not None:
+                area = options.scan_area
                 try:
+                    if dev.has_option("tl-x"):
+                        dev.set_option("tl-x", area.x / 10.0)
+                    if dev.has_option("tl-y"):
+                        dev.set_option("tl-y", area.y / 10.0)
                     if dev.has_option("br-x"):
-                        dev.set_option("br-x", options.page_size.width / 10.0)
+                        dev.set_option("br-x", (area.x + area.width) / 10.0)
                     if dev.has_option("br-y"):
-                        dev.set_option("br-y", options.page_size.height / 10.0)
+                        dev.set_option("br-y", (area.y + area.height) / 10.0)
                 except ScanError:
                     pass  # scanner may use different units (e.g. pixels)
 

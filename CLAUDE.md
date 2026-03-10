@@ -68,7 +68,7 @@ Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner ob
 ### Scanner lifecycle
 
 1. `list_scanners()` returns lightweight `Scanner` objects (no device session). Each Scanner has `name` (always populated, platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA where WSD reports the driver vendor), and `model` (SANE only; None on macOS/WIA).
-2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources`, `resolutions`, `color_modes`, `max_page_sizes`, `defaults`
+2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources`, `resolutions`, `color_modes`, `max_scan_area`, `defaults`
 3. `scanner.scan(...)` calls `scanner.scan_pages()` which yields `ScannedPage` objects (raw pixels), then `build_pdf()` converts them into a single PDF
 4. `scanner.scan_pages(...)` yields individual `ScannedPage` objects for preview/reordering workflows
 5. `scanner.close()` releases the session
@@ -114,7 +114,7 @@ The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `
 
 ## Conventions
 
-- All page sizes are in 1/10 millimeters (e.g., A4 = `PageSize(2100, 2970)`)
+- All scan areas are in 1/10 millimeters (e.g., full A4 = `ScanArea(0, 0, 2100, 2970)`)
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
