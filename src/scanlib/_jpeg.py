@@ -40,7 +40,9 @@ if sys.platform == "darwin":
     _cf.CFRelease.argtypes = [ctypes.c_void_p]
     _cf.CFStringCreateWithCString.restype = ctypes.c_void_p
     _cf.CFStringCreateWithCString.argtypes = [
-        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
     ]
     _cf.CFDictionaryCreate.restype = ctypes.c_void_p
     _cf.CFDictionaryCreate.argtypes = [
@@ -53,21 +55,33 @@ if sys.platform == "darwin":
     ]
     _cf.CFNumberCreate.restype = ctypes.c_void_p
     _cf.CFNumberCreate.argtypes = [
-        ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
     ]
 
     _cg.CGColorSpaceCreateWithName.restype = ctypes.c_void_p
     _cg.CGColorSpaceCreateWithName.argtypes = [ctypes.c_void_p]
     _cg.CGDataProviderCreateWithData.restype = ctypes.c_void_p
     _cg.CGDataProviderCreateWithData.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
     ]
     _cg.CGImageCreate.restype = ctypes.c_void_p
     _cg.CGImageCreate.argtypes = [
-        ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
-        ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p,
-        ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.c_bool, ctypes.c_int,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_bool,
+        ctypes.c_int,
     ]
     _cg.CGImageRelease.argtypes = [ctypes.c_void_p]
     _cg.CGColorSpaceRelease.argtypes = [ctypes.c_void_p]
@@ -75,17 +89,20 @@ if sys.platform == "darwin":
 
     _io.CGImageDestinationCreateWithData.restype = ctypes.c_void_p
     _io.CGImageDestinationCreateWithData.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
     ]
     _io.CGImageDestinationAddImage.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
     ]
     _io.CGImageDestinationFinalize.restype = ctypes.c_bool
     _io.CGImageDestinationFinalize.argtypes = [ctypes.c_void_p]
 
-    _kCGColorSpaceGenericGray = ctypes.c_void_p.in_dll(
-        _cg, "kCGColorSpaceGenericGray"
-    )
+    _kCGColorSpaceGenericGray = ctypes.c_void_p.in_dll(_cg, "kCGColorSpaceGenericGray")
     _kCGColorSpaceSRGB = ctypes.c_void_p.in_dll(_cg, "kCGColorSpaceSRGB")
 
     _kCFStringEncodingUTF8 = 0x08000100
@@ -93,15 +110,22 @@ if sys.platform == "darwin":
     _kCGImageAlphaNone = 0
 
     _jpeg_type_str = _cf.CFStringCreateWithCString(
-        None, b"public.jpeg", _kCFStringEncodingUTF8,
+        None,
+        b"public.jpeg",
+        _kCFStringEncodingUTF8,
     )
     _quality_key_str = _cf.CFStringCreateWithCString(
-        None, b"kCGImageDestinationLossyCompressionQuality",
+        None,
+        b"kCGImageDestinationLossyCompressionQuality",
         _kCFStringEncodingUTF8,
     )
 
     def encode_jpeg(
-        pixels: bytes, width: int, height: int, color_mode: ColorMode, quality: int,
+        pixels: bytes,
+        width: int,
+        height: int,
+        color_mode: ColorMode,
+        quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using macOS ImageIO."""
         if color_mode == ColorMode.COLOR:
@@ -116,16 +140,31 @@ if sys.platform == "darwin":
 
         color_space = _cg.CGColorSpaceCreateWithName(cs_name)
         provider = _cg.CGDataProviderCreateWithData(
-            None, pixels, len(pixels), None,
+            None,
+            pixels,
+            len(pixels),
+            None,
         )
         image = _cg.CGImageCreate(
-            width, height, 8, bits_per_pixel, bytes_per_row,
-            color_space, _kCGImageAlphaNone, provider, None, False, 0,
+            width,
+            height,
+            8,
+            bits_per_pixel,
+            bytes_per_row,
+            color_space,
+            _kCGImageAlphaNone,
+            provider,
+            None,
+            False,
+            0,
         )
 
         data = _cf.CFDataCreateMutable(None, 0)
         dest = _io.CGImageDestinationCreateWithData(
-            data, _jpeg_type_str, 1, None,
+            data,
+            _jpeg_type_str,
+            1,
+            None,
         )
 
         q = ctypes.c_double(quality / 100.0)
@@ -186,7 +225,9 @@ elif sys.platform == "win32":
         d2 = int(parts[1], 16)
         d3 = int(parts[2], 16)
         d4_hex = parts[3] + parts[4]
-        d4 = (ctypes.c_ubyte * 8)(*[int(d4_hex[i:i+2], 16) for i in range(0, 16, 2)])
+        d4 = (ctypes.c_ubyte * 8)(
+            *[int(d4_hex[i : i + 2], 16) for i in range(0, 16, 2)]
+        )
         return _GUID(d1, d2, d3, d4)
 
     _CLSID_WICImagingFactory = _make_guid("{cacaf262-9370-4615-a13b-9f5539da4c0a}")
@@ -232,8 +273,11 @@ elif sys.platform == "win32":
             _vtbl_call(ptr, 2, _Release_proto)
 
     _ole32.CoCreateInstance.argtypes = [
-        ctypes.POINTER(_GUID), c_void_p, DWORD,
-        ctypes.POINTER(_GUID), ctypes.POINTER(c_void_p),
+        ctypes.POINTER(_GUID),
+        c_void_p,
+        DWORD,
+        ctypes.POINTER(_GUID),
+        ctypes.POINTER(c_void_p),
     ]
     _ole32.CoCreateInstance.restype = HRESULT
     _ole32.CreateStreamOnHGlobal.argtypes = [c_void_p, BOOL, ctypes.POINTER(c_void_p)]
@@ -275,7 +319,11 @@ elif sys.platform == "win32":
         return _wic_factory
 
     def encode_jpeg(
-        pixels: bytes, width: int, height: int, color_mode: ColorMode, quality: int,
+        pixels: bytes,
+        width: int,
+        height: int,
+        color_mode: ColorMode,
+        quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using Windows WIC."""
         from _scanlib_accel import rgb_to_bgr
@@ -300,30 +348,35 @@ elif sys.platform == "win32":
 
             # IWICImagingFactory::CreateEncoder (slot 8)
             _CreateEncoder = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p,
-                ctypes.POINTER(_GUID), ctypes.POINTER(_GUID),
+                HRESULT,
+                c_void_p,
+                ctypes.POINTER(_GUID),
+                ctypes.POINTER(_GUID),
                 ctypes.POINTER(c_void_p),
             )
             guid_jpeg = _GUID_ContainerFormatJpeg
-            hr = _vtbl_call(factory, 8, _CreateEncoder,
-                             byref(guid_jpeg), None, byref(encoder))
+            hr = _vtbl_call(
+                factory, 8, _CreateEncoder, byref(guid_jpeg), None, byref(encoder)
+            )
             if hr < 0:
                 raise RuntimeError(f"CreateEncoder failed: 0x{hr & 0xFFFFFFFF:08x}")
 
             # IWICBitmapEncoder::Initialize (slot 3)
-            _Initialize_Enc = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p, c_void_p, DWORD)
+            _Initialize_Enc = ctypes.WINFUNCTYPE(HRESULT, c_void_p, c_void_p, DWORD)
             hr = _vtbl_call(encoder, 3, _Initialize_Enc, stream, 0x2)
             if hr < 0:
-                raise RuntimeError(f"Encoder.Initialize failed: 0x{hr & 0xFFFFFFFF:08x}")
+                raise RuntimeError(
+                    f"Encoder.Initialize failed: 0x{hr & 0xFFFFFFFF:08x}"
+                )
 
             # IWICBitmapEncoder::CreateNewFrame (slot 10)
             _CreateNewFrame = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p,
-                ctypes.POINTER(c_void_p), ctypes.POINTER(c_void_p),
+                HRESULT,
+                c_void_p,
+                ctypes.POINTER(c_void_p),
+                ctypes.POINTER(c_void_p),
             )
-            hr = _vtbl_call(encoder, 10, _CreateNewFrame,
-                             byref(frame), byref(prop_bag))
+            hr = _vtbl_call(encoder, 10, _CreateNewFrame, byref(frame), byref(prop_bag))
             if hr < 0:
                 raise RuntimeError(f"CreateNewFrame failed: 0x{hr & 0xFFFFFFFF:08x}")
 
@@ -336,14 +389,16 @@ elif sys.platform == "win32":
             var.vt = _VT_R4
             var.fltVal = quality / 100.0
             _PB2_Write = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p, ULONG,
-                ctypes.POINTER(_PROPBAG2), ctypes.POINTER(_VARIANT),
+                HRESULT,
+                c_void_p,
+                ULONG,
+                ctypes.POINTER(_PROPBAG2),
+                ctypes.POINTER(_VARIANT),
             )
             _vtbl_call(prop_bag, 4, _PB2_Write, 1, byref(pb), byref(var))
 
             # IWICBitmapFrameEncode::Initialize (slot 3)
-            _Initialize_Frame = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p, c_void_p)
+            _Initialize_Frame = ctypes.WINFUNCTYPE(HRESULT, c_void_p, c_void_p)
             hr = _vtbl_call(frame, 3, _Initialize_Frame, prop_bag)
             if hr < 0:
                 raise RuntimeError(f"Frame.Initialize failed: 0x{hr & 0xFFFFFFFF:08x}")
@@ -356,12 +411,14 @@ elif sys.platform == "win32":
 
             # IWICBitmapFrameEncode::SetResolution (slot 5)
             _SetResolution = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p, ctypes.c_double, ctypes.c_double)
+                HRESULT, c_void_p, ctypes.c_double, ctypes.c_double
+            )
             _vtbl_call(frame, 5, _SetResolution, 96.0, 96.0)
 
             # IWICBitmapFrameEncode::SetPixelFormat (slot 6)
             _SetPixelFormat = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p, ctypes.POINTER(_GUID))
+                HRESULT, c_void_p, ctypes.POINTER(_GUID)
+            )
             fmt = _GUID()
             ctypes.memmove(byref(fmt), byref(pixel_fmt), ctypes.sizeof(_GUID))
             hr = _vtbl_call(frame, 6, _SetPixelFormat, byref(fmt))
@@ -370,9 +427,11 @@ elif sys.platform == "win32":
 
             # IWICBitmapFrameEncode::WritePixels (slot 10)
             _WritePixels = ctypes.WINFUNCTYPE(
-                HRESULT, c_void_p, DWORD, DWORD, DWORD, ctypes.c_char_p)
-            hr = _vtbl_call(frame, 10, _WritePixels,
-                             height, stride, len(pixels), pixels)
+                HRESULT, c_void_p, DWORD, DWORD, DWORD, ctypes.c_char_p
+            )
+            hr = _vtbl_call(
+                frame, 10, _WritePixels, height, stride, len(pixels), pixels
+            )
             if hr < 0:
                 raise RuntimeError(f"WritePixels failed: 0x{hr & 0xFFFFFFFF:08x}")
 
@@ -423,10 +482,15 @@ else:
             lib.tjCompress2.argtypes = [
                 ctypes.c_void_p,
                 ctypes.POINTER(ctypes.c_ubyte),
-                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
                 ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
                 ctypes.POINTER(ctypes.c_ulong),
-                ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
             ]
             lib.tjFree.argtypes = [ctypes.c_void_p]
             lib.tjDestroy.argtypes = [ctypes.c_void_p]
@@ -451,7 +515,11 @@ else:
         )
 
     def encode_jpeg(
-        pixels: bytes, width: int, height: int, color_mode: ColorMode, quality: int,
+        pixels: bytes,
+        width: int,
+        height: int,
+        color_mode: ColorMode,
+        quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using libjpeg-turbo."""
         if color_mode == ColorMode.COLOR:
@@ -468,9 +536,17 @@ else:
         jpeg_size = ctypes.c_ulong(0)
 
         ret = _tj_lib.tjCompress2(
-            _tj_handle, src, width, pitch, height, pixel_format,
-            ctypes.byref(jpeg_buf), ctypes.byref(jpeg_size),
-            subsamp, quality, 0,
+            _tj_handle,
+            src,
+            width,
+            pitch,
+            height,
+            pixel_format,
+            ctypes.byref(jpeg_buf),
+            ctypes.byref(jpeg_size),
+            subsamp,
+            quality,
+            0,
         )
         if ret != 0:
             raise RuntimeError("TurboJPEG compression failed")

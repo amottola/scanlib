@@ -35,7 +35,9 @@ with scanner:
             return reply.lower() != "q"
 
         doc = scanner.scan(
-            source=ScanSource.FLATBED if ScanSource.FLATBED in scanner.sources else None,
+            source=(
+                ScanSource.FLATBED if ScanSource.FLATBED in scanner.sources else None
+            ),
             next_page=next_page,
         )
         with open("scan_multi.pdf", "wb") as f:

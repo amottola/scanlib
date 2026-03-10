@@ -19,7 +19,9 @@ with scanners[0] as scanner:
         preview_path = f"preview_{i}.jpg"
         with open(preview_path, "wb") as f:
             f.write(page.to_jpeg(quality=70))
-        print(f"  Page {i}: {page.width}x{page.height}, {page.color_mode.value} — {preview_path}")
+        print(
+            f"  Page {i}: {page.width}x{page.height}, {page.color_mode.value} — {preview_path}"
+        )
 
 # Pages can be reordered, filtered, duplicated, etc.
 # pages.reverse()

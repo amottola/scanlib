@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-timeout"]
+dev = ["pytest", "pytest-timeout", "pre-commit"]
 docs = ["sphinx", "furo", "sphinx-autodoc-typehints"]
 
 [tool.pytest.ini_options]
@@ -24,6 +24,10 @@ markers = ["hardware: tests requiring a physical scanner"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
 
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"

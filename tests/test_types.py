@@ -76,27 +76,49 @@ class TestScanner:
             _ = s.defaults
 
     def test_defaults_none_by_default(self):
-        mock_backend = type("B", (), {
-            "open_scanner": lambda self, s: None,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.defaults is None
 
     def test_defaults_populated(self):
         defaults = ScannerDefaults(
-            dpi=300, color_mode=ColorMode.COLOR, source=ScanSource.FLATBED,
+            dpi=300,
+            color_mode=ColorMode.COLOR,
+            source=ScanSource.FLATBED,
         )
+
         def open_scanner(self, s):
             s._defaults = defaults
-        mock_backend = type("B", (), {
-            "open_scanner": open_scanner,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": open_scanner,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.defaults is defaults
             assert s.defaults.dpi == 300
@@ -107,24 +129,43 @@ class TestScanner:
             _ = s.resolutions
 
     def test_resolutions_default_empty(self):
-        mock_backend = type("B", (), {
-            "open_scanner": lambda self, s: None,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.resolutions == []
 
     def test_resolutions_populated(self):
         def open_scanner(self, s):
             s._resolutions = [150, 300, 600]
-        mock_backend = type("B", (), {
-            "open_scanner": open_scanner,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": open_scanner,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.resolutions == [150, 300, 600]
 
@@ -134,24 +175,43 @@ class TestScanner:
             _ = s.color_modes
 
     def test_color_modes_default_empty(self):
-        mock_backend = type("B", (), {
-            "open_scanner": lambda self, s: None,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.color_modes == []
 
     def test_color_modes_populated(self):
         def open_scanner(self, s):
             s._color_modes = [ColorMode.COLOR, ColorMode.GRAY]
-        mock_backend = type("B", (), {
-            "open_scanner": open_scanner,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": open_scanner,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.color_modes == [ColorMode.COLOR, ColorMode.GRAY]
 
@@ -161,22 +221,40 @@ class TestScanner:
             _ = s.max_scan_area
 
     def test_max_scan_area_default_empty(self):
-        mock_backend = type("B", (), {
-            "open_scanner": lambda self, s: None,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             assert s.max_scan_area == {}
 
     def test_context_manager(self):
-        mock_backend = type("B", (), {
-            "open_scanner": lambda self, s: None,
-            "close_scanner": lambda self, s: None,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s as opened:
             assert opened is s
             assert s.is_open is True
@@ -253,19 +331,25 @@ def _make_page(width=16, height=16, color_mode=ColorMode.COLOR):
     elif color_mode == ColorMode.COLOR:
         channels = 3
         data = bytes(
-            [(y * 37 + x * 13) & 0xFF
-             for y in range(height)
-             for x in range(width * channels)]
+            [
+                (y * 37 + x * 13) & 0xFF
+                for y in range(height)
+                for x in range(width * channels)
+            ]
         )
     else:
         channels = 1
         data = bytes(
-            [(y * 37 + x * 13) & 0xFF
-             for y in range(height)
-             for x in range(width * channels)]
+            [
+                (y * 37 + x * 13) & 0xFF
+                for y in range(height)
+                for x in range(width * channels)
+            ]
         )
     return ScannedPage(
-        data=data, width=width, height=height,
+        data=data,
+        width=width,
+        height=height,
         color_mode=color_mode,
     )
 
@@ -303,12 +387,13 @@ class TestScannedPage:
     def test_to_png_roundtrip(self):
         """PNG output can be decoded (validate structure)."""
         import struct, zlib
+
         page = _make_page(width=4, height=4, color_mode=ColorMode.COLOR)
         png = page.to_png()
         # Parse IHDR
         ihdr_len = struct.unpack(">I", png[8:12])[0]
         assert png[12:16] == b"IHDR"
-        w, h, bd, ct = struct.unpack(">IIBBBBB", png[16:16 + ihdr_len])[:4]
+        w, h, bd, ct = struct.unpack(">IIBBBBB", png[16 : 16 + ihdr_len])[:4]
         assert w == 4
         assert h == 4
         assert bd == 8
@@ -323,18 +408,21 @@ class TestRotate:
             for x in range(width):
                 data.extend([x & 0xFF, y & 0xFF, (x + y) & 0xFF])
         return ScannedPage(
-            data=bytes(data), width=width, height=height,
+            data=bytes(data),
+            width=width,
+            height=height,
             color_mode=ColorMode.COLOR,
         )
 
     def _gray_page(self, width, height):
         """Create a grayscale page with unique pixel values per position."""
         data = bytes(
-            (y * width + x) & 0xFF
-            for y in range(height) for x in range(width)
+            (y * width + x) & 0xFF for y in range(height) for x in range(width)
         )
         return ScannedPage(
-            data=data, width=width, height=height,
+            data=data,
+            width=width,
+            height=height,
             color_mode=ColorMode.GRAY,
         )
 
@@ -445,13 +533,22 @@ class TestScanPages:
             if max_scan_areas is not None:
                 s._max_scan_areas = max_scan_areas
 
-        mock_backend = type("B", (), {
-            "open_scanner": open_scanner,
-            "close_scanner": lambda self, s: None,
-            "scan_pages": lambda self, s, o: iter([_make_page()]),
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": open_scanner,
+                "close_scanner": lambda self, s: None,
+                "scan_pages": lambda self, s, o: iter([_make_page()]),
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         s.open()
         return s
 
@@ -461,13 +558,22 @@ class TestScanPages:
         def scan_pages(self, scanner, options):
             return iter(pages)
 
-        mock_backend = type("B", (), {
-            "open_scanner": lambda self, s: None,
-            "close_scanner": lambda self, s: None,
-            "scan_pages": scan_pages,
-        })()
-        s = Scanner(name="test", vendor=None, model=None, backend="sane",
-                    _backend_impl=mock_backend)
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "scan_pages": scan_pages,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
         with s:
             result = list(s.scan_pages())
         assert len(result) == 2
@@ -534,16 +640,14 @@ class TestBuildPdf:
     def test_bw_page_jpeg_format(self):
         """BW page encoded as JPEG in PDF (must unpack to 8-bit)."""
         page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
-        doc = build_pdf([page], color_mode=ColorMode.BW,
-                        image_format=ImageFormat.JPEG)
+        doc = build_pdf([page], color_mode=ColorMode.BW, image_format=ImageFormat.JPEG)
         assert doc.data[:8] == b"%PDF-1.4"
         assert b"/DCTDecode" in doc.data
 
     def test_bw_page_png_format(self):
         """BW page encoded as PNG in PDF (stays 1-bit)."""
         page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
-        doc = build_pdf([page], color_mode=ColorMode.BW,
-                        image_format=ImageFormat.PNG)
+        doc = build_pdf([page], color_mode=ColorMode.BW, image_format=ImageFormat.PNG)
         assert doc.data[:8] == b"%PDF-1.4"
         assert b"/FlateDecode" in doc.data
         assert b"/BitsPerComponent 1" in doc.data
@@ -563,9 +667,13 @@ class TestBwToGray:
 
         width, height = 10, 5
         # Start with gray pixels: alternating 0 and 255
-        gray = bytes([255 if (x + y) % 2 == 0 else 0
-                      for y in range(height)
-                      for x in range(width)])
+        gray = bytes(
+            [
+                255 if (x + y) % 2 == 0 else 0
+                for y in range(height)
+                for x in range(width)
+            ]
+        )
         packed = gray_to_bw(gray, width, height)
         unpacked = bw_to_gray(packed, width, height)
         assert unpacked == gray
@@ -598,11 +706,12 @@ class TestBwToGray:
     def test_to_png_bw_page(self):
         """to_png() works on 1-bit BW pages."""
         import struct
+
         page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
         png = page.to_png()
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
         # Parse IHDR to verify bit_depth=1
         ihdr_len = struct.unpack(">I", png[8:12])[0]
-        w, h, bd, ct = struct.unpack(">IIBBBBB", png[16:16 + ihdr_len])[:4]
+        w, h, bd, ct = struct.unpack(">IIBBBBB", png[16 : 16 + ihdr_len])[:4]
         assert bd == 1
         assert ct == 0

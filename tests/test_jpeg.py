@@ -19,11 +19,14 @@ def _gradient_gray(width: int, height: int) -> bytes:
     """Create a grayscale gradient image."""
     return bytes(
         ((y * width + x) * 255 // max(width * height - 1, 1)) & 0xFF
-        for y in range(height) for x in range(width)
+        for y in range(height)
+        for x in range(width)
     )
 
 
-def _solid_rgb(width: int, height: int, r: int = 128, g: int = 128, b: int = 128) -> bytes:
+def _solid_rgb(
+    width: int, height: int, r: int = 128, g: int = 128, b: int = 128
+) -> bytes:
     """Create a solid RGB image."""
     pixel = bytes([r, g, b])
     return pixel * (width * height)

@@ -83,10 +83,12 @@ class TestWiaBackend:
 
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
     def test_list_scanners(self, _mock_rp):
-        storages = _make_device_storages([
-            ("Scanner A", "Vendor A", 1),
-            ("Scanner B", None, 1),
-        ])
+        storages = _make_device_storages(
+            [
+                ("Scanner A", "Vendor A", 1),
+                ("Scanner B", None, 1),
+            ]
+        )
         dm = mock.MagicMock()
         dm.EnumDeviceInfo.return_value = _make_mock_enum(storages)
 
@@ -110,10 +112,12 @@ class TestWiaBackend:
 
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
     def test_list_scanners_filters_non_scanners(self, _mock_rp):
-        storages = _make_device_storages([
-            ("Scanner A", None, 1),    # scanner (STI type 1)
-            ("Camera X", None, 2),     # not a scanner
-        ])
+        storages = _make_device_storages(
+            [
+                ("Scanner A", None, 1),  # scanner (STI type 1)
+                ("Camera X", None, 2),  # not a scanner
+            ]
+        )
         dm = mock.MagicMock()
         dm.EnumDeviceInfo.return_value = _make_mock_enum(storages)
 
@@ -127,12 +131,12 @@ class TestWiaBackend:
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
     @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area", return_value=None)
-    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
-                return_value=[ScanSource.FLATBED, ScanSource.FEEDER])
+    @mock.patch(
+        f"{_WIA_MODULE}._read_wia_sources",
+        return_value=[ScanSource.FLATBED, ScanSource.FEEDER],
+    )
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
-    def test_open_scanner_queries_sources(
-        self, _rp, _src, _ps, _res, _cm, _def
-    ):
+    def test_open_scanner_queries_sources(self, _rp, _src, _ps, _res, _cm, _def):
         dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
@@ -144,14 +148,13 @@ class TestWiaBackend:
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
-    @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area",
-                return_value=ScanArea(x=0, y=0, width=2159, height=2970))
-    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
-                return_value=[ScanSource.FLATBED])
+    @mock.patch(
+        f"{_WIA_MODULE}._read_wia_max_scan_area",
+        return_value=ScanArea(x=0, y=0, width=2159, height=2970),
+    )
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources", return_value=[ScanSource.FLATBED])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
-    def test_open_scanner_queries_max_scan_area(
-        self, _rp, _src, _ps, _res, _cm, _def
-    ):
+    def test_open_scanner_queries_max_scan_area(self, _rp, _src, _ps, _res, _cm, _def):
         dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
@@ -166,15 +169,11 @@ class TestWiaBackend:
 
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
-    @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions",
-                return_value=[150, 300, 600])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[150, 300, 600])
     @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area", return_value=None)
-    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
-                return_value=[ScanSource.FLATBED])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources", return_value=[ScanSource.FLATBED])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
-    def test_open_scanner_queries_resolutions(
-        self, _rp, _src, _ps, _res, _cm, _def
-    ):
+    def test_open_scanner_queries_resolutions(self, _rp, _src, _ps, _res, _cm, _def):
         dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
@@ -183,16 +182,15 @@ class TestWiaBackend:
         assert scanners[0]._resolutions == [150, 300, 600]
 
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
-    @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes",
-                return_value=[ColorMode.BW, ColorMode.GRAY, ColorMode.COLOR])
+    @mock.patch(
+        f"{_WIA_MODULE}._read_wia_color_modes",
+        return_value=[ColorMode.BW, ColorMode.GRAY, ColorMode.COLOR],
+    )
     @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
     @mock.patch(f"{_WIA_MODULE}._read_wia_max_scan_area", return_value=None)
-    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
-                return_value=[ScanSource.FLATBED])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources", return_value=[ScanSource.FLATBED])
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
-    def test_open_scanner_queries_color_modes(
-        self, _rp, _src, _ps, _res, _cm, _def
-    ):
+    def test_open_scanner_queries_color_modes(self, _rp, _src, _ps, _res, _cm, _def):
         dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()

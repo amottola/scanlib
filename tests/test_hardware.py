@@ -9,7 +9,13 @@ from __future__ import annotations
 import pytest
 
 import scanlib
-from scanlib._types import ColorMode, ScanArea, Scanner, ScanSource, ScannedDocument  # noqa: F401
+from scanlib._types import (
+    ColorMode,
+    ScanArea,
+    Scanner,
+    ScanSource,
+    ScannedDocument,
+)  # noqa: F401
 
 
 def _get_scanners() -> list[Scanner]:

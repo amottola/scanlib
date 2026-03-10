@@ -18,14 +18,18 @@ from scanlib._types import (
 def mock_sane():
     """Patch SANE entry-point functions so tests work on any platform."""
     import scanlib.backends._sane  # ensure module is imported before patching
-    with mock.patch("scanlib.backends._sane._init"), \
-         mock.patch("scanlib.backends._sane._get_devices") as m_get_devices, \
-         mock.patch("scanlib.backends._sane._open_device") as m_open:
+
+    with (
+        mock.patch("scanlib.backends._sane._init"),
+        mock.patch("scanlib.backends._sane._get_devices") as m_get_devices,
+        mock.patch("scanlib.backends._sane._open_device") as m_open,
+    ):
         yield SimpleNamespace(get_devices=m_get_devices, open=m_open)
 
 
 def _make_backend():
     from scanlib.backends._sane import SaneBackend
+
     return SaneBackend()
 
 
@@ -49,19 +53,22 @@ def _make_mock_dev(options=None):
 def _setup_scan(dev, width, height, pixel_data, frame=1, depth=8):
     """Configure a mock device to return scan data."""
     from scanlib.backends._sane import Parameters
+
     dev.start.return_value = 0  # GOOD
     dev.get_parameters.return_value = Parameters(
         format=frame,
         last_frame=True,
-        bytes_per_line=width * (3 if frame == 1 else 1) if depth == 8 else (width + 7) // 8,
+        bytes_per_line=(
+            width * (3 if frame == 1 else 1) if depth == 8 else (width + 7) // 8
+        ),
         pixels_per_line=width,
         lines=height,
         depth=depth,
     )
     # Return all data in one chunk, then EOF
     dev.read.side_effect = [
-        (pixel_data, 0),   # GOOD
-        (b"", 5),          # EOF
+        (pixel_data, 0),  # GOOD
+        (b"", 5),  # EOF
     ]
 
 
@@ -100,10 +107,20 @@ class TestSaneBackend:
         assert scanners == []
 
     def test_open_scanner_parses_sources(self, mock_sane):
-        mock_dev = _make_mock_dev([
-            ("source", "Source", "Scan source", 3, 0, 0, 0,
-             ["Flatbed", "Automatic Document Feeder"]),
-        ])
+        mock_dev = _make_mock_dev(
+            [
+                (
+                    "source",
+                    "Source",
+                    "Scan source",
+                    3,
+                    0,
+                    0,
+                    0,
+                    ["Flatbed", "Automatic Document Feeder"],
+                ),
+            ]
+        )
         mock_sane.get_devices.return_value = [
             ("epson:usb:001", "Epson", "GT-S50", "flatbed scanner"),
         ]
@@ -117,12 +134,13 @@ class TestSaneBackend:
         assert ScanSource.FEEDER in scanners[0]._sources
 
     def test_open_scanner_parses_max_scan_area(self, mock_sane):
-        mock_dev = _make_mock_dev([
-            ("source", "Source", "Scan source", 3, 0, 0, 0,
-             ["Flatbed"]),
-            ("br_x", "Bottom-right x", "", 1, 3, 4, 5, (0.0, 215.9, 0.1)),
-            ("br_y", "Bottom-right y", "", 1, 3, 4, 5, (0.0, 297.0, 0.1)),
-        ])
+        mock_dev = _make_mock_dev(
+            [
+                ("source", "Source", "Scan source", 3, 0, 0, 0, ["Flatbed"]),
+                ("br_x", "Bottom-right x", "", 1, 3, 4, 5, (0.0, 215.9, 0.1)),
+                ("br_y", "Bottom-right y", "", 1, 3, 4, 5, (0.0, 297.0, 0.1)),
+            ]
+        )
         mock_sane.get_devices.return_value = [
             ("epson:usb:001", "Epson", "GT-S50", "flatbed scanner"),
         ]
@@ -171,7 +189,11 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = list(backend.scan_pages(scanner, ScanOptions(dpi=300, color_mode=ColorMode.COLOR)))
+        pages = list(
+            backend.scan_pages(
+                scanner, ScanOptions(dpi=300, color_mode=ColorMode.COLOR)
+            )
+        )
 
         assert len(pages) == 1
         assert pages[0].width == 100
@@ -196,7 +218,9 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        list(backend.scan_pages(scanner, ScanOptions(dpi=600, color_mode=ColorMode.GRAY)))
+        list(
+            backend.scan_pages(scanner, ScanOptions(dpi=600, color_mode=ColorMode.GRAY))
+        )
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["mode"] == "gray"
@@ -209,7 +233,11 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        list(backend.scan_pages(scanner, ScanOptions(scan_area=ScanArea(0, 0, 2100, 2970))))
+        list(
+            backend.scan_pages(
+                scanner, ScanOptions(scan_area=ScanArea(0, 0, 2100, 2970))
+            )
+        )
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["tl-x"] == 0.0
@@ -224,7 +252,11 @@ class TestSaneBackend:
 
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
-        list(backend.scan_pages(scanner, ScanOptions(scan_area=ScanArea(100, 200, 500, 700))))
+        list(
+            backend.scan_pages(
+                scanner, ScanOptions(scan_area=ScanArea(100, 200, 500, 700))
+            )
+        )
 
         calls = {c.args[0]: c.args[1] for c in mock_dev.set_option.call_args_list}
         assert calls["tl-x"] == 10.0
@@ -238,12 +270,17 @@ class TestSaneBackend:
         mock_dev = _make_mock_dev()
         mock_dev.start.side_effect = [0, 7]  # GOOD, NO_DOCS
         mock_dev.get_parameters.return_value = Parameters(
-            format=0, last_frame=True, bytes_per_line=50,
-            pixels_per_line=50, lines=50, depth=8,
+            format=0,
+            last_frame=True,
+            bytes_per_line=50,
+            pixels_per_line=50,
+            lines=50,
+            depth=8,
         )
         pixel_data = _make_gray_pixel_data(50, 50)
         mock_dev.read.side_effect = [
-            (pixel_data, 0), (b"", 5),  # first page
+            (pixel_data, 0),
+            (b"", 5),  # first page
         ]
 
         backend = _make_backend()
@@ -289,7 +326,11 @@ class TestSaneBackend:
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
         calls = []
-        list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: (calls.append(pct) or True))))
+        list(
+            backend.scan_pages(
+                scanner, ScanOptions(progress=lambda pct: (calls.append(pct) or True))
+            )
+        )
 
         assert 0 in calls
         assert 100 in calls
@@ -302,7 +343,9 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: None)))
+        pages = list(
+            backend.scan_pages(scanner, ScanOptions(progress=lambda pct: None))
+        )
         assert len(pages) == 1
         assert pages[0].color_mode == ColorMode.GRAY
 
@@ -323,16 +366,23 @@ class TestSaneBackend:
         mock_dev = _make_mock_dev()
         pixel_data = _make_gray_pixel_data(50, 50)
         params = Parameters(
-            format=0, last_frame=True, bytes_per_line=50,
-            pixels_per_line=50, lines=50, depth=8,
+            format=0,
+            last_frame=True,
+            bytes_per_line=50,
+            pixels_per_line=50,
+            lines=50,
+            depth=8,
         )
 
         mock_dev.start.side_effect = [0, 0, 0, 7]
         mock_dev.get_parameters.return_value = params
         mock_dev.read.side_effect = [
-            (pixel_data, 0), (b"", 5),  # page 1
-            (pixel_data, 0), (b"", 5),  # page 2
-            (pixel_data, 0), (b"", 5),  # page 3
+            (pixel_data, 0),
+            (b"", 5),  # page 1
+            (pixel_data, 0),
+            (b"", 5),  # page 2
+            (pixel_data, 0),
+            (b"", 5),  # page 3
         ]
 
         backend = _make_backend()
@@ -353,14 +403,19 @@ class TestSaneBackend:
         mock_dev = _make_mock_dev()
         pixel_data = _make_gray_pixel_data(50, 50)
         params = Parameters(
-            format=0, last_frame=True, bytes_per_line=50,
-            pixels_per_line=50, lines=50, depth=8,
+            format=0,
+            last_frame=True,
+            bytes_per_line=50,
+            pixels_per_line=50,
+            lines=50,
+            depth=8,
         )
 
         mock_dev.start.side_effect = [0, 7]  # GOOD, NO_DOCS
         mock_dev.get_parameters.return_value = params
         mock_dev.read.side_effect = [
-            (pixel_data, 0), (b"", 5),  # page 1
+            (pixel_data, 0),
+            (b"", 5),  # page 1
         ]
 
         backend = _make_backend()
@@ -378,7 +433,9 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = list(backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.COLOR)))
+        pages = list(
+            backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.COLOR))
+        )
         assert len(pages) == 1
         assert pages[0].color_mode == ColorMode.COLOR
         assert pages[0].width == 4
@@ -394,20 +451,30 @@ class TestSaneBackend:
         backend = _make_backend()
         scanner = _open_scanner(backend, mock_sane, mock_dev)
 
-        pages = list(backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.GRAY)))
+        pages = list(
+            backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.GRAY))
+        )
         assert len(pages) == 1
         assert pages[0].color_mode == ColorMode.GRAY
 
     def test_open_scanner_populates_defaults(self, mock_sane):
         """Defaults are read from device options after open."""
-        mock_dev = _make_mock_dev([
-            ("source", "Source", "", 3, 0, 0, 0,
-             ["Flatbed", "Automatic Document Feeder"]),
-            ("mode", "Mode", "", 3, 0, 0, 0,
-             ["color", "gray", "lineart"]),
-            ("resolution", "Resolution", "", 1, 4, 0, 0,
-             [75, 150, 300, 600, 1200]),
-        ])
+        mock_dev = _make_mock_dev(
+            [
+                (
+                    "source",
+                    "Source",
+                    "",
+                    3,
+                    0,
+                    0,
+                    0,
+                    ["Flatbed", "Automatic Document Feeder"],
+                ),
+                ("mode", "Mode", "", 3, 0, 0, 0, ["color", "gray", "lineart"]),
+                ("resolution", "Resolution", "", 1, 4, 0, 0, [75, 150, 300, 600, 1200]),
+            ]
+        )
         mock_dev.get_option.side_effect = lambda name: {
             "resolution": 300,
             "mode": "color",
@@ -437,9 +504,11 @@ class TestSaneBackend:
 
     def test_open_scanner_resolutions_from_range(self, mock_sane):
         """Resolution constraint as range tuple produces a list."""
-        mock_dev = _make_mock_dev([
-            ("resolution", "Resolution", "", 1, 4, 0, 0, (75, 1200, 75)),
-        ])
+        mock_dev = _make_mock_dev(
+            [
+                ("resolution", "Resolution", "", 1, 4, 0, 0, (75, 1200, 75)),
+            ]
+        )
         mock_dev.get_option.side_effect = lambda name: {
             "resolution": 300,
             "mode": "color",

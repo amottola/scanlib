@@ -115,14 +115,16 @@ class _ScanDelegate(NSObject):
         return self
 
     def _finish_page(self) -> None:
-        self.completed_pages.append((
-            self._current_bands,
-            self._current_width,
-            self._current_height,
-            self._current_bpc,
-            self._current_nc,
-            self._current_pdt,
-        ))
+        self.completed_pages.append(
+            (
+                self._current_bands,
+                self._current_width,
+                self._current_height,
+                self._current_bpc,
+                self._current_nc,
+                self._current_pdt,
+            )
+        )
         self._current_bands = []
 
     def device_didOpenSessionWithError_(self, device, error):
@@ -203,9 +205,9 @@ def _assemble_image(
                 break
             src_off = r * bytes_per_row
             dst_off = row_idx * pixel_row_bytes
-            full_buf[dst_off:dst_off + pixel_row_bytes] = (
-                raw[src_off:src_off + pixel_row_bytes]
-            )
+            full_buf[dst_off : dst_off + pixel_row_bytes] = raw[
+                src_off : src_off + pixel_row_bytes
+            ]
 
     # Map pixel data type to color type and extract raw pixels.
     # The scanner may return extra channels (e.g. 4-component RGBX for
@@ -224,7 +226,9 @@ def _assemble_image(
             raw_pixels = strip_alpha(bytes(full_buf), width, height, nc)
         else:
             rgb_row_bytes = width * 3
-            raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, rgb_row_bytes)
+            raw_pixels = trim_rows(
+                bytes(full_buf), height, pixel_row_bytes, rgb_row_bytes
+            )
 
     return raw_pixels, width, height, mode
 
@@ -398,7 +402,9 @@ class MacOSBackend:
         invoker.func = func
         invoker.args = args
         invoker.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "invoke:", None, True,
+            "invoke:",
+            None,
+            True,
         )
         if invoker.error is not None:
             raise invoker.error
@@ -419,7 +425,9 @@ class MacOSBackend:
         with self._lock:
             return self._call(self._close_scanner_impl, scanner)
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]:
+    def scan_pages(
+        self, scanner: Scanner, options: ScanOptions
+    ) -> Iterator[ScannedPage]:
         with self._lock:
             pages = self._call(self._scan_pages_impl, scanner, options)
         yield from pages
@@ -487,9 +495,7 @@ class MacOSBackend:
             )
 
         if last_error:
-            raise ScanError(
-                f"Failed to open device session: {last_error}"
-            )
+            raise ScanError(f"Failed to open device session: {last_error}")
 
         if not scan_delegate._session_open:
             raise ScanError("Timed out waiting for device session to open")
@@ -595,7 +601,9 @@ class MacOSBackend:
                     NSDate.dateWithTimeIntervalSinceNow_(0.1),
                 )
 
-    def _scan_pages_impl(self, scanner: Scanner, options: ScanOptions) -> list[ScannedPage]:
+    def _scan_pages_impl(
+        self, scanner: Scanner, options: ScanOptions
+    ) -> list[ScannedPage]:
         device = self._devices.get(scanner.name)
         if device is None:
             raise ScanError("Scanner is not open")
@@ -636,7 +644,9 @@ class MacOSBackend:
                 elif supported_depths and supported_depths.count() > 0:
                     # Use the smallest supported depth >= preferred, or
                     # just the smallest available.
-                    idx = supported_depths.indexGreaterThanOrEqualToIndex_(preferred_bpc)
+                    idx = supported_depths.indexGreaterThanOrEqualToIndex_(
+                        preferred_bpc
+                    )
                     if idx == 2**63 - 1:  # NSNotFound
                         idx = supported_depths.firstIndex()
                     fu.setBitDepth_(idx)
@@ -710,18 +720,20 @@ class MacOSBackend:
                 if not scan_delegate.completed_pages:
                     if is_feeder:
                         raise FeederEmptyError("No documents in feeder")
-                    raise ScanError(
-                        "Scan completed but no image data was received"
-                    )
+                    raise ScanError("Scan completed but no image data was received")
 
                 for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
-                    raw, width, height, mode = (
-                        _assemble_image(bands, w, h, bpc, nc, pdt)
+                    raw, width, height, mode = _assemble_image(
+                        bands, w, h, bpc, nc, pdt
                     )
-                    all_pages.append(ScannedPage(
-                        data=raw, width=width, height=height,
-                        color_mode=mode,
-                    ))
+                    all_pages.append(
+                        ScannedPage(
+                            data=raw,
+                            width=width,
+                            height=height,
+                            color_mode=mode,
+                        )
+                    )
 
                 if is_feeder:
                     break

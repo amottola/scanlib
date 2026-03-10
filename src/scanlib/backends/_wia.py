@@ -46,6 +46,7 @@ except ImportError:
 
 try:
     import ctypes.wintypes as wt
+
     _HAS_WIN32 = True
 except (ImportError, ValueError):
     _HAS_WIN32 = False
@@ -215,6 +216,7 @@ class _WiaTransferParams(Structure):
 # COM interface definitions (vtable order from wia_lh.h)
 # ---------------------------------------------------------------------------
 
+
 # Forward declarations
 class IWiaPropertyStorage(IUnknown):
     _iid_ = GUID("{98B5E8A0-29CC-491a-AAC0-E6DB4FDCCEB6}")
@@ -252,169 +254,246 @@ _CLSID_WiaDevMgr2 = GUID("{B6C292BC-7C88-41ee-8B54-8EC92617E599}")
 
 # --- IEnumWIA_DEV_INFO methods (vtable slots 3-7) ---
 IEnumWIA_DEV_INFO._methods_ = [
-    COMMETHOD([], HRESULT, "Next",
-              (["in"], c_ulong, "celt"),
-              (["out"], POINTER(POINTER(IWiaPropertyStorage)), "rgelt"),
-              (["out"], POINTER(c_ulong), "pceltFetched")),
-    COMMETHOD([], HRESULT, "Skip",
-              (["in"], c_ulong, "celt")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "Next",
+        (["in"], c_ulong, "celt"),
+        (["out"], POINTER(POINTER(IWiaPropertyStorage)), "rgelt"),
+        (["out"], POINTER(c_ulong), "pceltFetched"),
+    ),
+    COMMETHOD([], HRESULT, "Skip", (["in"], c_ulong, "celt")),
     COMMETHOD([], HRESULT, "Reset"),
-    COMMETHOD([], HRESULT, "Clone",
-              (["out"], POINTER(POINTER(IEnumWIA_DEV_INFO)), "ppIEnum")),
-    COMMETHOD([], HRESULT, "GetCount",
-              (["out"], POINTER(c_ulong), "celt")),
+    COMMETHOD(
+        [], HRESULT, "Clone", (["out"], POINTER(POINTER(IEnumWIA_DEV_INFO)), "ppIEnum")
+    ),
+    COMMETHOD([], HRESULT, "GetCount", (["out"], POINTER(c_ulong), "celt")),
 ]
 
 # --- IWiaPropertyStorage methods (vtable slots 3-17) ---
 # Extends IUnknown directly in WIA (not IPropertyStorage, despite similar API)
 IWiaPropertyStorage._methods_ = [
     # [3] ReadMultiple
-    COMMETHOD([], HRESULT, "ReadMultiple",
-              (["in"], c_ulong, "cpspec"),
-              (["in"], POINTER(_PROPSPEC), "rgpspec"),
-              (["out"], POINTER(_PROPVARIANT), "rgpropvar")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "ReadMultiple",
+        (["in"], c_ulong, "cpspec"),
+        (["in"], POINTER(_PROPSPEC), "rgpspec"),
+        (["out"], POINTER(_PROPVARIANT), "rgpropvar"),
+    ),
     # [4] WriteMultiple
-    COMMETHOD([], HRESULT, "WriteMultiple",
-              (["in"], c_ulong, "cpspec"),
-              (["in"], POINTER(_PROPSPEC), "rgpspec"),
-              (["in"], POINTER(_PROPVARIANT), "rgpropvar"),
-              (["in"], c_ulong, "propidNameFirst")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "WriteMultiple",
+        (["in"], c_ulong, "cpspec"),
+        (["in"], POINTER(_PROPSPEC), "rgpspec"),
+        (["in"], POINTER(_PROPVARIANT), "rgpropvar"),
+        (["in"], c_ulong, "propidNameFirst"),
+    ),
     # [5] DeleteMultiple
-    COMMETHOD([], HRESULT, "DeleteMultiple",
-              (["in"], c_ulong, "cpspec"),
-              (["in"], POINTER(_PROPSPEC), "rgpspec")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "DeleteMultiple",
+        (["in"], c_ulong, "cpspec"),
+        (["in"], POINTER(_PROPSPEC), "rgpspec"),
+    ),
     # [6] ReadPropertyNames
-    COMMETHOD([], HRESULT, "ReadPropertyNames",
-              (["in"], c_ulong, "cpropid"),
-              (["in"], POINTER(c_ulong), "rgpropid"),
-              (["out"], POINTER(c_void_p), "rglpwstrName")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "ReadPropertyNames",
+        (["in"], c_ulong, "cpropid"),
+        (["in"], POINTER(c_ulong), "rgpropid"),
+        (["out"], POINTER(c_void_p), "rglpwstrName"),
+    ),
     # [7] WritePropertyNames
-    COMMETHOD([], HRESULT, "WritePropertyNames",
-              (["in"], c_ulong, "cpropid"),
-              (["in"], POINTER(c_ulong), "rgpropid"),
-              (["in"], POINTER(c_void_p), "rglpwstrName")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "WritePropertyNames",
+        (["in"], c_ulong, "cpropid"),
+        (["in"], POINTER(c_ulong), "rgpropid"),
+        (["in"], POINTER(c_void_p), "rglpwstrName"),
+    ),
     # [8] DeletePropertyNames
-    COMMETHOD([], HRESULT, "DeletePropertyNames",
-              (["in"], c_ulong, "cpropid"),
-              (["in"], POINTER(c_ulong), "rgpropid")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "DeletePropertyNames",
+        (["in"], c_ulong, "cpropid"),
+        (["in"], POINTER(c_ulong), "rgpropid"),
+    ),
     # [9] Commit
-    COMMETHOD([], HRESULT, "Commit",
-              (["in"], c_ulong, "grfCommitFlags")),
+    COMMETHOD([], HRESULT, "Commit", (["in"], c_ulong, "grfCommitFlags")),
     # [10] Revert
     COMMETHOD([], HRESULT, "Revert"),
     # [11] Enum
-    COMMETHOD([], HRESULT, "Enum",
-              (["out"], POINTER(c_void_p), "ppenum")),
+    COMMETHOD([], HRESULT, "Enum", (["out"], POINTER(c_void_p), "ppenum")),
     # [12] SetTimes
-    COMMETHOD([], HRESULT, "SetTimes",
-              (["in"], c_void_p, "pctime"),
-              (["in"], c_void_p, "patime"),
-              (["in"], c_void_p, "pmtime")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "SetTimes",
+        (["in"], c_void_p, "pctime"),
+        (["in"], c_void_p, "patime"),
+        (["in"], c_void_p, "pmtime"),
+    ),
     # [13] SetClass
-    COMMETHOD([], HRESULT, "SetClass",
-              (["in"], POINTER(GUID), "clsid")),
+    COMMETHOD([], HRESULT, "SetClass", (["in"], POINTER(GUID), "clsid")),
     # [14] Stat
-    COMMETHOD([], HRESULT, "Stat",
-              (["out"], c_void_p, "pstatpsstg")),
+    COMMETHOD([], HRESULT, "Stat", (["out"], c_void_p, "pstatpsstg")),
     # [15] GetPropertyAttributes (WIA extension)
-    COMMETHOD([], HRESULT, "GetPropertyAttributes",
-              (["in"], c_ulong, "cpspec"),
-              (["in"], POINTER(_PROPSPEC), "rgpspec"),
-              (["out"], POINTER(c_ulong), "rgflags"),
-              (["out"], POINTER(_PROPVARIANT), "rgpropvar")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "GetPropertyAttributes",
+        (["in"], c_ulong, "cpspec"),
+        (["in"], POINTER(_PROPSPEC), "rgpspec"),
+        (["out"], POINTER(c_ulong), "rgflags"),
+        (["out"], POINTER(_PROPVARIANT), "rgpropvar"),
+    ),
     # [16] GetCount (WIA extension)
-    COMMETHOD([], HRESULT, "GetCount",
-              (["out"], POINTER(c_ulong), "pulNumProps")),
+    COMMETHOD([], HRESULT, "GetCount", (["out"], POINTER(c_ulong), "pulNumProps")),
     # [17] GetPropertyStream
-    COMMETHOD([], HRESULT, "GetPropertyStream",
-              (["out"], POINTER(GUID), "pCompatibilityId"),
-              (["out"], POINTER(POINTER(IStream)), "ppIStream")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "GetPropertyStream",
+        (["out"], POINTER(GUID), "pCompatibilityId"),
+        (["out"], POINTER(POINTER(IStream)), "ppIStream"),
+    ),
     # [18] SetPropertyStream
-    COMMETHOD([], HRESULT, "SetPropertyStream",
-              (["in"], POINTER(GUID), "pCompatibilityId"),
-              (["in"], POINTER(IStream), "pIStream")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "SetPropertyStream",
+        (["in"], POINTER(GUID), "pCompatibilityId"),
+        (["in"], POINTER(IStream), "pIStream"),
+    ),
 ]
 
 # --- IEnumWiaItem2 methods (vtable slots 3-7) ---
 IEnumWiaItem2._methods_ = [
-    COMMETHOD([], HRESULT, "Next",
-              (["in"], c_ulong, "cElt"),
-              (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2"),
-              (["out"], POINTER(c_ulong), "pcEltFetched")),
-    COMMETHOD([], HRESULT, "Skip",
-              (["in"], c_ulong, "cElt")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "Next",
+        (["in"], c_ulong, "cElt"),
+        (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2"),
+        (["out"], POINTER(c_ulong), "pcEltFetched"),
+    ),
+    COMMETHOD([], HRESULT, "Skip", (["in"], c_ulong, "cElt")),
     COMMETHOD([], HRESULT, "Reset"),
-    COMMETHOD([], HRESULT, "Clone",
-              (["out"], POINTER(POINTER(IEnumWiaItem2)), "ppIEnum")),
-    COMMETHOD([], HRESULT, "GetCount",
-              (["out"], POINTER(c_ulong), "cElt")),
+    COMMETHOD(
+        [], HRESULT, "Clone", (["out"], POINTER(POINTER(IEnumWiaItem2)), "ppIEnum")
+    ),
+    COMMETHOD([], HRESULT, "GetCount", (["out"], POINTER(c_ulong), "cElt")),
 ]
 
 # --- IWiaItem2 methods (vtable slots 3-18+) ---
 IWiaItem2._methods_ = [
     # [3] CreateChildItem
-    COMMETHOD([], HRESULT, "CreateChildItem",
-              (["in"], c_long, "lItemFlags"),
-              (["in"], c_long, "lCreationFlags"),
-              (["in"], comtypes.BSTR, "bstrItemName"),
-              (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "CreateChildItem",
+        (["in"], c_long, "lItemFlags"),
+        (["in"], c_long, "lCreationFlags"),
+        (["in"], comtypes.BSTR, "bstrItemName"),
+        (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2"),
+    ),
     # [4] DeleteItem
-    COMMETHOD([], HRESULT, "DeleteItem",
-              (["in"], c_long, "lFlags")),
+    COMMETHOD([], HRESULT, "DeleteItem", (["in"], c_long, "lFlags")),
     # [5] EnumChildItems
-    COMMETHOD([], HRESULT, "EnumChildItems",
-              (["in"], POINTER(GUID), "pCategoryGUID"),
-              (["out"], POINTER(POINTER(IEnumWiaItem2)), "ppIEnumWiaItem2")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "EnumChildItems",
+        (["in"], POINTER(GUID), "pCategoryGUID"),
+        (["out"], POINTER(POINTER(IEnumWiaItem2)), "ppIEnumWiaItem2"),
+    ),
     # [6] FindItemByName
-    COMMETHOD([], HRESULT, "FindItemByName",
-              (["in"], c_long, "lFlags"),
-              (["in"], comtypes.BSTR, "bstrFullItemName"),
-              (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "FindItemByName",
+        (["in"], c_long, "lFlags"),
+        (["in"], comtypes.BSTR, "bstrFullItemName"),
+        (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2"),
+    ),
     # [7] GetItemCategory
-    COMMETHOD([], HRESULT, "GetItemCategory",
-              (["out"], POINTER(GUID), "pItemCategoryGUID")),
+    COMMETHOD(
+        [], HRESULT, "GetItemCategory", (["out"], POINTER(GUID), "pItemCategoryGUID")
+    ),
     # [8] GetItemType
-    COMMETHOD([], HRESULT, "GetItemType",
-              (["out"], POINTER(c_long), "pItemType")),
+    COMMETHOD([], HRESULT, "GetItemType", (["out"], POINTER(c_long), "pItemType")),
 ]
 
 # --- IWiaTransfer methods (vtable slots 3-6) ---
 IWiaTransfer._methods_ = [
-    COMMETHOD([], HRESULT, "Download",
-              (["in"], c_long, "lFlags"),
-              (["in"], POINTER(IWiaTransferCallback), "pIWiaTransferCallback")),
-    COMMETHOD([], HRESULT, "Upload",
-              (["in"], c_long, "lFlags"),
-              (["in"], POINTER(IStream), "pSource"),
-              (["in"], POINTER(IWiaTransferCallback), "pIWiaTransferCallback")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "Download",
+        (["in"], c_long, "lFlags"),
+        (["in"], POINTER(IWiaTransferCallback), "pIWiaTransferCallback"),
+    ),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "Upload",
+        (["in"], c_long, "lFlags"),
+        (["in"], POINTER(IStream), "pSource"),
+        (["in"], POINTER(IWiaTransferCallback), "pIWiaTransferCallback"),
+    ),
     COMMETHOD([], HRESULT, "Cancel"),
-    COMMETHOD([], HRESULT, "EnumWIA_FORMAT_INFO",
-              (["out"], POINTER(c_void_p), "ppEnum")),
+    COMMETHOD(
+        [], HRESULT, "EnumWIA_FORMAT_INFO", (["out"], POINTER(c_void_p), "ppEnum")
+    ),
 ]
 
 # --- IWiaTransferCallback methods (vtable slots 3-4) ---
 IWiaTransferCallback._methods_ = [
-    COMMETHOD([], HRESULT, "TransferCallback",
-              (["in"], c_long, "lFlags"),
-              (["in"], POINTER(_WiaTransferParams), "pWiaTransferParams")),
-    COMMETHOD([], HRESULT, "GetNextStream",
-              (["in"], c_long, "lFlags"),
-              (["in"], comtypes.BSTR, "bstrItemName"),
-              (["in"], comtypes.BSTR, "bstrFullItemName"),
-              (["out"], POINTER(POINTER(IStream)), "ppDestination")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "TransferCallback",
+        (["in"], c_long, "lFlags"),
+        (["in"], POINTER(_WiaTransferParams), "pWiaTransferParams"),
+    ),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "GetNextStream",
+        (["in"], c_long, "lFlags"),
+        (["in"], comtypes.BSTR, "bstrItemName"),
+        (["in"], comtypes.BSTR, "bstrFullItemName"),
+        (["out"], POINTER(POINTER(IStream)), "ppDestination"),
+    ),
 ]
 
 # --- IWiaDevMgr2 methods (vtable slots 3+) ---
 IWiaDevMgr2._methods_ = [
     # [3] EnumDeviceInfo
-    COMMETHOD([], HRESULT, "EnumDeviceInfo",
-              (["in"], c_long, "lFlags"),
-              (["out"], POINTER(POINTER(IEnumWIA_DEV_INFO)), "ppIEnum")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "EnumDeviceInfo",
+        (["in"], c_long, "lFlags"),
+        (["out"], POINTER(POINTER(IEnumWIA_DEV_INFO)), "ppIEnum"),
+    ),
     # [4] CreateDevice
-    COMMETHOD([], HRESULT, "CreateDevice",
-              (["in"], c_long, "lFlags"),
-              (["in"], comtypes.BSTR, "bstrDeviceID"),
-              (["out"], POINTER(POINTER(IWiaItem2)), "ppWiaItem2Root")),
+    COMMETHOD(
+        [],
+        HRESULT,
+        "CreateDevice",
+        (["in"], c_long, "lFlags"),
+        (["in"], comtypes.BSTR, "bstrDeviceID"),
+        (["out"], POINTER(POINTER(IWiaItem2)), "ppWiaItem2Root"),
+    ),
 ]
 
 
@@ -492,9 +571,7 @@ def _write_prop_guid(storage, prop_id: int, value: GUID) -> None:
     storage.WriteMultiple(1, byref(spec), byref(var), 2)
 
 
-def _read_prop_attributes(
-    storage, prop_id: int
-) -> tuple[int, list[int]]:
+def _read_prop_attributes(storage, prop_id: int) -> tuple[int, list[int]]:
     """Read property attributes (flags and valid values).
 
     Returns (flags, values) where values is a list of ints for
@@ -583,9 +660,7 @@ def _read_wia_max_scan_area(storage) -> ScanArea | None:
     return None
 
 
-def _read_wia_defaults(
-    storage, sources: list[ScanSource]
-) -> ScannerDefaults | None:
+def _read_wia_defaults(storage, sources: list[ScanSource]) -> ScannerDefaults | None:
     """Read default settings from WIA item properties."""
     try:
         dpi = int(_read_prop(storage, _WIA_IPS_XRES, 300))
@@ -665,7 +740,9 @@ class _TransferCallback(COMObject):
                     mode = _BMP_COLOR_MODE.get((ct, bd), ColorMode.COLOR)
                     self.pages.append(
                         ScannedPage(
-                            data=raw, width=w, height=h,
+                            data=raw,
+                            width=w,
+                            height=h,
                             color_mode=mode,
                         )
                     )
@@ -676,8 +753,9 @@ class _TransferCallback(COMObject):
                 pass  # feeder empty — handled after Download returns
         return _S_OK
 
-    def IWiaTransferCallback_GetNextStream(self, this, lFlags, bstrItemName,
-                                           bstrFullItemName, ppDestination):
+    def IWiaTransferCallback_GetNextStream(
+        self, this, lFlags, bstrItemName, bstrFullItemName, ppDestination
+    ):
         stream = c_void_p()
         hr = _ole32.CreateStreamOnHGlobal(None, True, byref(stream))
         if hr != _S_OK:
@@ -730,12 +808,8 @@ class WiaBackend:
         msg = wt.MSG()
 
         while True:
-            user32.MsgWaitForMultipleObjects(
-                1, handles, False, 0xFFFFFFFF, 0x04FF
-            )
-            while user32.PeekMessageW(
-                byref(msg), None, 0, 0, 0x0001
-            ):
+            user32.MsgWaitForMultipleObjects(1, handles, False, 0xFFFFFFFF, 0x04FF)
+            while user32.PeekMessageW(byref(msg), None, 0, 0, 0x0001):
                 user32.TranslateMessage(byref(msg))
                 user32.DispatchMessageW(byref(msg))
             while True:
@@ -853,9 +927,7 @@ class WiaBackend:
             dm = self._create_device_manager()
             root_item = dm.CreateDevice(0, dev_id)
         except Exception as exc:
-            raise ScanError(
-                f"Failed to open scanner {scanner.name!r}: {exc}"
-            ) from exc
+            raise ScanError(f"Failed to open scanner {scanner.name!r}: {exc}") from exc
 
         # Read device-level properties from root item
         try:
@@ -924,9 +996,13 @@ class WiaBackend:
                 try:
                     root_storage = root_item.QueryInterface(IWiaPropertyStorage)
                     if options.source == ScanSource.FEEDER:
-                        _write_prop(root_storage, _WIA_DPS_DOCUMENT_HANDLING_SELECT, _FEEDER)
+                        _write_prop(
+                            root_storage, _WIA_DPS_DOCUMENT_HANDLING_SELECT, _FEEDER
+                        )
                     elif options.source == ScanSource.FLATBED:
-                        _write_prop(root_storage, _WIA_DPS_DOCUMENT_HANDLING_SELECT, _FLATBED)
+                        _write_prop(
+                            root_storage, _WIA_DPS_DOCUMENT_HANDLING_SELECT, _FLATBED
+                        )
                 except Exception:
                     pass
 
@@ -976,16 +1052,16 @@ class WiaBackend:
                     msg_text = str(exc).lower()
                     if callback._aborted:
                         raise ScanAborted("Scan aborted") from exc
-                    if hr == _WIA_ERROR_PAPER_EMPTY or "paper" in msg_text or "empty" in msg_text:
+                    if (
+                        hr == _WIA_ERROR_PAPER_EMPTY
+                        or "paper" in msg_text
+                        or "empty" in msg_text
+                    ):
                         if is_feeder and not all_pages and not callback.pages:
-                            raise FeederEmptyError(
-                                "No documents in feeder"
-                            ) from exc
+                            raise FeederEmptyError("No documents in feeder") from exc
                         # Feeder empty after some pages — that's normal
                     elif "cancel" in msg_text or "abort" in msg_text:
-                        raise ScanAborted(
-                            f"Scan cancelled by device: {exc}"
-                        ) from exc
+                        raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
                     elif not callback.pages and not all_pages:
                         raise ScanError(f"Scan failed: {exc}") from exc
 
@@ -994,7 +1070,9 @@ class WiaBackend:
                 if is_feeder:
                     break  # Download handles all feeder pages
                 else:
-                    if options.next_page is not None and options.next_page(len(all_pages)):
+                    if options.next_page is not None and options.next_page(
+                        len(all_pages)
+                    ):
                         continue
                     break
 

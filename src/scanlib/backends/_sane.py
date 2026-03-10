@@ -99,6 +99,7 @@ def _float_to_fixed(v: float) -> int:
 # SANE C structures
 # ---------------------------------------------------------------------------
 
+
 class _SANE_Device(ctypes.Structure):
     _fields_ = [
         ("name", ctypes.c_char_p),
@@ -183,8 +184,11 @@ if _lib is not None:
     _lib.sane_get_option_descriptor.restype = ctypes.POINTER(_SANE_Option_Descriptor)
 
     _lib.sane_control_option.argtypes = [
-        _SANE_Handle, ctypes.c_int, ctypes.c_int,
-        ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+        _SANE_Handle,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_int),
     ]
     _lib.sane_control_option.restype = ctypes.c_int
 
@@ -195,8 +199,10 @@ if _lib is not None:
     _lib.sane_get_parameters.restype = ctypes.c_int
 
     _lib.sane_read.argtypes = [
-        _SANE_Handle, ctypes.POINTER(ctypes.c_ubyte),
-        ctypes.c_int, ctypes.POINTER(ctypes.c_int),
+        _SANE_Handle,
+        ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int),
     ]
     _lib.sane_read.restype = ctypes.c_int
 
@@ -207,6 +213,7 @@ if _lib is not None:
 # ---------------------------------------------------------------------------
 # Low-level helpers
 # ---------------------------------------------------------------------------
+
 
 def _check_status(status: int, context: str = "") -> None:
     if status != _STATUS_GOOD:
@@ -241,12 +248,14 @@ def _get_devices() -> list[tuple[str, str, str, str]]:
     i = 0
     while device_list[i]:
         dev = device_list[i].contents
-        result.append((
-            dev.name.decode("utf-8", errors="replace") if dev.name else "",
-            dev.vendor.decode("utf-8", errors="replace") if dev.vendor else "",
-            dev.model.decode("utf-8", errors="replace") if dev.model else "",
-            dev.type.decode("utf-8", errors="replace") if dev.type else "",
-        ))
+        result.append(
+            (
+                dev.name.decode("utf-8", errors="replace") if dev.name else "",
+                dev.vendor.decode("utf-8", errors="replace") if dev.vendor else "",
+                dev.model.decode("utf-8", errors="replace") if dev.model else "",
+                dev.type.decode("utf-8", errors="replace") if dev.type else "",
+            )
+        )
         i += 1
     return result
 
@@ -262,6 +271,7 @@ def _open_device(name: str) -> _SaneDevice:
 # ---------------------------------------------------------------------------
 # SANE device wrapper
 # ---------------------------------------------------------------------------
+
 
 class _SaneDevice:
     """Wrapper around a SANE device handle."""
@@ -345,13 +355,22 @@ class _SaneDevice:
             desc = desc_p.contents
             name = desc.name.decode("utf-8", errors="replace") if desc.name else ""
             title = desc.title.decode("utf-8", errors="replace") if desc.title else ""
-            description = desc.desc.decode("utf-8", errors="replace") if desc.desc else ""
+            description = (
+                desc.desc.decode("utf-8", errors="replace") if desc.desc else ""
+            )
             constraint = self._read_constraint(desc)
-            result.append((
-                name, title, description,
-                desc.type, desc.unit, desc.size, desc.cap,
-                constraint,
-            ))
+            result.append(
+                (
+                    name,
+                    title,
+                    description,
+                    desc.type,
+                    desc.unit,
+                    desc.size,
+                    desc.cap,
+                    constraint,
+                )
+            )
             i += 1
         return result
 
@@ -368,26 +387,38 @@ class _SaneDevice:
             encoded = str(value).encode("utf-8")
             buf = ctypes.create_string_buffer(encoded, desc.size)
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_SET_VALUE,
-                buf, ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_SET_VALUE,
+                buf,
+                ctypes.byref(info),
             )
         elif desc.type == _TYPE_INT:
             val = ctypes.c_int(int(value))
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_SET_VALUE,
-                ctypes.byref(val), ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_SET_VALUE,
+                ctypes.byref(val),
+                ctypes.byref(info),
             )
         elif desc.type == _TYPE_FIXED:
             val = ctypes.c_int(_float_to_fixed(float(value)))
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_SET_VALUE,
-                ctypes.byref(val), ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_SET_VALUE,
+                ctypes.byref(val),
+                ctypes.byref(info),
             )
         elif desc.type == _TYPE_BOOL:
             val = ctypes.c_int(1 if value else 0)
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_SET_VALUE,
-                ctypes.byref(val), ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_SET_VALUE,
+                ctypes.byref(val),
+                ctypes.byref(info),
             )
         else:
             raise ScanError(f"Cannot set option {name!r} of type {desc.type}")
@@ -409,24 +440,33 @@ class _SaneDevice:
         if desc.type == _TYPE_STRING:
             buf = ctypes.create_string_buffer(desc.size)
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_GET_VALUE,
-                buf, ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_GET_VALUE,
+                buf,
+                ctypes.byref(info),
             )
             _check_status(status, f"get_option({name!r})")
             return buf.value.decode("utf-8", errors="replace")
         elif desc.type in (_TYPE_INT, _TYPE_BOOL):
             val = ctypes.c_int()
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_GET_VALUE,
-                ctypes.byref(val), ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_GET_VALUE,
+                ctypes.byref(val),
+                ctypes.byref(info),
             )
             _check_status(status, f"get_option({name!r})")
             return val.value
         elif desc.type == _TYPE_FIXED:
             val = ctypes.c_int()
             status = _lib.sane_control_option(
-                self._handle, option_num, _ACTION_GET_VALUE,
-                ctypes.byref(val), ctypes.byref(info),
+                self._handle,
+                option_num,
+                _ACTION_GET_VALUE,
+                ctypes.byref(val),
+                ctypes.byref(info),
             )
             _check_status(status, f"get_option({name!r})")
             return _fixed_to_float(val.value)
@@ -518,13 +558,23 @@ def _parse_max_scan_area(opts: list[tuple]) -> ScanArea | None:
     for opt in opts:
         name = opt[0]
         constraint = opt[7]
-        if name in ("br_x", "br-x") and isinstance(constraint, (list, tuple)) and len(constraint) >= 2:
+        if (
+            name in ("br_x", "br-x")
+            and isinstance(constraint, (list, tuple))
+            and len(constraint) >= 2
+        ):
             max_x = float(constraint[1])
-        elif name in ("br_y", "br-y") and isinstance(constraint, (list, tuple)) and len(constraint) >= 2:
+        elif (
+            name in ("br_y", "br-y")
+            and isinstance(constraint, (list, tuple))
+            and len(constraint) >= 2
+        ):
             max_y = float(constraint[1])
 
     if max_x is not None and max_y is not None:
-        return ScanArea(x=0, y=0, width=math.ceil(max_x * 10), height=math.ceil(max_y * 10))
+        return ScanArea(
+            x=0, y=0, width=math.ceil(max_x * 10), height=math.ceil(max_y * 10)
+        )
     return None
 
 
@@ -535,7 +585,11 @@ def _parse_resolutions(opts: list[tuple]) -> list[int]:
             constraint = opt[7]
             if isinstance(constraint, (list, tuple)):
                 if len(constraint) == 3 and isinstance(constraint[0], (int, float)):
-                    lo, hi, step = int(constraint[0]), int(constraint[1]), int(constraint[2] or 1)
+                    lo, hi, step = (
+                        int(constraint[0]),
+                        int(constraint[1]),
+                        int(constraint[2] or 1),
+                    )
                     step = max(1, step)
                     if (hi - lo) // step <= 1000:
                         return list(range(lo, hi + 1, step))
@@ -545,7 +599,9 @@ def _parse_resolutions(opts: list[tuple]) -> list[int]:
     return []
 
 
-def _parse_color_modes(opts: list[tuple]) -> tuple[list[ColorMode], dict[ColorMode, str]]:
+def _parse_color_modes(
+    opts: list[tuple],
+) -> tuple[list[ColorMode], dict[ColorMode, str]]:
     """Extract supported color modes from SANE option descriptors.
 
     Returns ``(modes, sane_names)`` where *sane_names* maps each
@@ -672,7 +728,9 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
         )
 
     return ScannedPage(
-        data=pixel_data, width=width, height=height,
+        data=pixel_data,
+        width=width,
+        height=height,
         color_mode=mode,
     )
 
@@ -718,9 +776,7 @@ class SaneBackend:
         try:
             dev = _open_device(scanner.name)
         except Exception as exc:
-            raise ScanError(
-                f"Failed to open scanner {scanner.name!r}: {exc}"
-            ) from exc
+            raise ScanError(f"Failed to open scanner {scanner.name!r}: {exc}") from exc
         self._handles[scanner.name] = dev
 
         opts = _get_options(dev)
@@ -728,13 +784,16 @@ class SaneBackend:
         scanner._resolutions = _parse_resolutions(opts)
         scanner._color_modes, dev._sane_mode_names = _parse_color_modes(opts)
         scanner._defaults = _read_defaults(
-            scanner._resolutions, scanner._color_modes, scanner._sources,
+            scanner._resolutions,
+            scanner._color_modes,
+            scanner._sources,
         )
 
         for source in scanner._sources:
             try:
                 source_str = dev._sane_source_names.get(
-                    source, _SCAN_SOURCE_TO_SANE.get(source, source.value),
+                    source,
+                    _SCAN_SOURCE_TO_SANE.get(source, source.value),
                 )
                 dev.set_option("source", source_str)
             except Exception:
@@ -749,7 +808,9 @@ class SaneBackend:
         if dev is not None:
             dev.close()
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]:
+    def scan_pages(
+        self, scanner: Scanner, options: ScanOptions
+    ) -> Iterator[ScannedPage]:
         dev = self._handles.get(scanner.name)
         if dev is None:
             raise ScanError("Scanner is not open")

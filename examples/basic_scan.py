@@ -15,7 +15,9 @@ print(f"Using: {scanner.name}")
 with scanner:
     doc = scanner.scan()
 
-print(f"Scanned {doc.page_count} page, {doc.width}x{doc.height} px, {len(doc.data)} bytes")
+print(
+    f"Scanned {doc.page_count} page, {doc.width}x{doc.height} px, {len(doc.data)} bytes"
+)
 
 with open("scan.pdf", "wb") as f:
     f.write(doc.data)

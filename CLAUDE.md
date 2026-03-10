@@ -23,6 +23,12 @@ cd docs && make html
 
 # Install for development (builds C extension)
 pip install -e ".[dev]"
+
+# Run pre-commit hooks on all files
+pre-commit run --all-files
+
+# Code is formatted with Black (runs automatically via pre-commit)
+python -m black .
 ```
 
 ## Architecture

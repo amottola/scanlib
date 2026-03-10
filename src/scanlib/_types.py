@@ -7,7 +7,6 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Protocol
 
-
 # --- Exceptions ---
 
 
@@ -128,15 +127,20 @@ class ScannedPage:
         from _scanlib_accel import rotate_pixels
 
         rotated = rotate_pixels(
-            self.data, self.width, self.height,
-            _BPP[self.color_mode], degrees,
+            self.data,
+            self.width,
+            self.height,
+            _BPP[self.color_mode],
+            degrees,
         )
         if degrees == 180:
             new_w, new_h = self.width, self.height
         else:
             new_w, new_h = self.height, self.width
         return ScannedPage(
-            data=rotated, width=new_w, height=new_h,
+            data=rotated,
+            width=new_w,
+            height=new_h,
             color_mode=self.color_mode,
         )
 
@@ -197,14 +201,14 @@ class ScannedPage:
 
 # Lookup tables for ColorMode → internal format details.
 _BPP: dict[ColorMode, int] = {
-    ColorMode.BW: 0,       # 1-bit packed
+    ColorMode.BW: 0,  # 1-bit packed
     ColorMode.GRAY: 1,
     ColorMode.COLOR: 3,
 }
 _PNG_MODE: dict[ColorMode, tuple[int, int]] = {
-    ColorMode.BW: (0, 1),      # grayscale, 1-bit
-    ColorMode.GRAY: (0, 8),    # grayscale, 8-bit
-    ColorMode.COLOR: (2, 8),   # RGB, 8-bit
+    ColorMode.BW: (0, 1),  # grayscale, 1-bit
+    ColorMode.GRAY: (0, 8),  # grayscale, 8-bit
+    ColorMode.COLOR: (2, 8),  # RGB, 8-bit
 }
 
 
@@ -285,9 +289,7 @@ class Scanner:
     def sources(self) -> list[ScanSource]:
         """Available scan sources. Only populated after :meth:`open`."""
         if not self._is_open:
-            raise ScannerNotOpenError(
-                "Scanner must be opened before querying sources"
-            )
+            raise ScannerNotOpenError("Scanner must be opened before querying sources")
         return self._sources
 
     @property
@@ -298,9 +300,7 @@ class Scanner:
         Only available after :meth:`open`.
         """
         if not self._is_open:
-            raise ScannerNotOpenError(
-                "Scanner must be opened before querying defaults"
-            )
+            raise ScannerNotOpenError("Scanner must be opened before querying defaults")
         return self._defaults
 
     @property
@@ -398,8 +398,10 @@ class Scanner:
                 f"scanner supports {[s.value for s in self._sources]}"
             )
         if scan_area is not None and self._max_scan_areas:
-            resolved = source if source is not None else (
-                self._sources[0] if self._sources else None
+            resolved = (
+                source
+                if source is not None
+                else (self._sources[0] if self._sources else None)
             )
             if resolved is not None and resolved in self._max_scan_areas:
                 max_area = self._max_scan_areas[resolved]
@@ -491,7 +493,9 @@ class ScanBackend(Protocol):
 
     def close_scanner(self, scanner: Scanner) -> None: ...
 
-    def scan_pages(self, scanner: Scanner, options: ScanOptions) -> Iterator[ScannedPage]: ...
+    def scan_pages(
+        self, scanner: Scanner, options: ScanOptions
+    ) -> Iterator[ScannedPage]: ...
 
 
 # --- Utilities ---
@@ -529,7 +533,9 @@ def build_pdf(
     Returns a :class:`ScannedDocument` containing the PDF bytes.
     """
     if image_format is None:
-        image_format = ImageFormat.PNG if color_mode == ColorMode.BW else ImageFormat.JPEG
+        image_format = (
+            ImageFormat.PNG if color_mode == ColorMode.BW else ImageFormat.JPEG
+        )
     from _scanlib_accel import bw_to_gray, gray_to_bw, rgb_to_gray
 
     from ._jpeg import encode_jpeg
@@ -583,7 +589,7 @@ def build_pdf(
             else:
                 row_bytes = w
 
-            img_stream = zlib.compress(raw_pixels[:row_bytes * h])
+            img_stream = zlib.compress(raw_pixels[: row_bytes * h])
             filter_name = "/FlateDecode"
             pdf_bpc = 1 if mode == ColorMode.BW else 8
 
@@ -604,14 +610,10 @@ def build_pdf(
         # Content stream
         media_w = w * 72.0 / dpi
         media_h = h * 72.0 / dpi
-        content_bytes = (
-            f"q {media_w:.4f} 0 0 {media_h:.4f} 0 0 cm /Im0 Do Q"
-        ).encode()
+        content_bytes = (f"q {media_w:.4f} 0 0 {media_h:.4f} 0 0 cm /Im0 Do Q").encode()
         content_obj_id = len(objects)
         content_dict = f"<< /Length {len(content_bytes)} >>".encode()
-        objects.append(
-            content_dict + b"\nstream\n" + content_bytes + b"\nendstream"
-        )
+        objects.append(content_dict + b"\nstream\n" + content_bytes + b"\nendstream")
 
         # Page object
         page_obj_id = len(objects)

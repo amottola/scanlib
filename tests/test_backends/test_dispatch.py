@@ -63,7 +63,9 @@ class TestWiaDispatch:
             except Exception as exc:
                 errors[idx] = exc
 
-        threads = [threading.Thread(target=call_from_thread, args=(i,)) for i in range(4)]
+        threads = [
+            threading.Thread(target=call_from_thread, args=(i,)) for i in range(4)
+        ]
         for t in threads:
             t.start()
         for t in threads:

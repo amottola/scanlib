@@ -20,7 +20,9 @@ def _make_raw(width, height, color_mode=ColorMode.COLOR):
                 if (y * 37 + x * 13) & 1:
                     data[y * row_bytes + x // 8] |= 1 << (7 - (x % 8))
         return ScannedPage(
-            data=bytes(data), width=width, height=height,
+            data=bytes(data),
+            width=width,
+            height=height,
             color_mode=color_mode,
         )
 
@@ -32,10 +34,16 @@ def _make_raw(width, height, color_mode=ColorMode.COLOR):
         raise ValueError(f"Unsupported color mode: {color_mode}")
 
     data = bytes(
-        [(y * 37 + x * 13) & 0xFF for y in range(height) for x in range(width * channels)]
+        [
+            (y * 37 + x * 13) & 0xFF
+            for y in range(height)
+            for x in range(width * channels)
+        ]
     )
     return ScannedPage(
-        data=data, width=width, height=height,
+        data=data,
+        width=width,
+        height=height,
         color_mode=color_mode,
     )
 
@@ -123,11 +131,17 @@ class TestBuildPdfJpeg:
     def test_quality_affects_size(self):
         page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_low = build_pdf(
-            [page], dpi=300, image_format=ImageFormat.JPEG, jpeg_quality=10,
+            [page],
+            dpi=300,
+            image_format=ImageFormat.JPEG,
+            jpeg_quality=10,
         )
         page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_high = build_pdf(
-            [page], dpi=300, image_format=ImageFormat.JPEG, jpeg_quality=95,
+            [page],
+            dpi=300,
+            image_format=ImageFormat.JPEG,
+            jpeg_quality=95,
         )
         assert len(doc_low.data) < len(doc_high.data)
 
@@ -135,7 +149,9 @@ class TestBuildPdfJpeg:
         """BW mode with JPEG uses 8-bit grayscale (JPEG can't do 1-bit)."""
         page = _make_raw(16, 16, color_mode=ColorMode.COLOR)
         doc = build_pdf(
-            [page], dpi=300, color_mode=ColorMode.BW,
+            [page],
+            dpi=300,
+            color_mode=ColorMode.BW,
             image_format=ImageFormat.JPEG,
         )
         assert b"/DeviceGray" in doc.data
@@ -180,7 +196,9 @@ class TestColorModeConversion:
     def test_gray_mode_converts_rgb(self):
         page = _make_raw(4, 4, color_mode=ColorMode.COLOR)
         doc = build_pdf(
-            [page], dpi=72, color_mode=ColorMode.GRAY,
+            [page],
+            dpi=72,
+            color_mode=ColorMode.GRAY,
             image_format=ImageFormat.PNG,
         )
         assert b"/DeviceGray" in doc.data
@@ -190,7 +208,9 @@ class TestColorModeConversion:
     def test_bw_mode_converts_rgb(self):
         page = _make_raw(8, 4, color_mode=ColorMode.COLOR)
         doc = build_pdf(
-            [page], dpi=72, color_mode=ColorMode.BW,
+            [page],
+            dpi=72,
+            color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
         )
         assert b"/DeviceGray" in doc.data
@@ -199,7 +219,9 @@ class TestColorModeConversion:
     def test_bw_mode_from_grayscale(self):
         page = _make_raw(8, 4, color_mode=ColorMode.GRAY)
         doc = build_pdf(
-            [page], dpi=72, color_mode=ColorMode.BW,
+            [page],
+            dpi=72,
+            color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
         )
         assert b"/DeviceGray" in doc.data
@@ -209,7 +231,9 @@ class TestColorModeConversion:
         """1-bit input with BW mode passes through without re-conversion."""
         page = _make_raw(8, 4, color_mode=ColorMode.BW)
         doc = build_pdf(
-            [page], dpi=72, color_mode=ColorMode.BW,
+            [page],
+            dpi=72,
+            color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
         )
         assert b"/DeviceGray" in doc.data
@@ -226,7 +250,9 @@ class TestColorModeConversion:
         doc_color = build_pdf([page], dpi=300, image_format=ImageFormat.PNG)
         page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_bw = build_pdf(
-            [page], dpi=300, color_mode=ColorMode.BW,
+            [page],
+            dpi=300,
+            color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
         )
         assert len(doc_bw.data) < len(doc_color.data)
