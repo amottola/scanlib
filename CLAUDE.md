@@ -53,7 +53,7 @@ The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is
 
 The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` directly for each platform — no dispatch function or boolean flags.
 
-PNG encoding is handled in `build_pdf()` (`_types.py`) using stdlib `zlib` for deflate compression — no external dependency. Each `ScannedPage` exposes both `to_jpeg(quality)` and `to_png()` methods. `build_pdf()` uses JPEG (DCTDecode) by default and PNG (FlateDecode) when `fmt="png"` is specified.
+PNG encoding is handled in `build_pdf()` (`_types.py`) using stdlib `zlib` for deflate compression — no external dependency. Each `ScannedPage` exposes both `to_jpeg(quality)` and `to_png()` methods. When `image_format` is not specified, `build_pdf()` defaults to PNG for BW mode (1-bit packs much smaller than JPEG's 8-bit grayscale) and JPEG for color/grayscale.
 
 ### Backend selection and thread dispatch
 

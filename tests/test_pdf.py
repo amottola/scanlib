@@ -161,10 +161,10 @@ class TestRgbToGray:
 
 class TestGrayToBw:
     def test_threshold(self):
-        # 8 pixels: values above and below 128
-        gray = bytes([0, 64, 127, 128, 192, 255, 0, 255])
+        # 8 pixels: values above and below 64
+        gray = bytes([0, 32, 63, 64, 128, 255, 0, 255])
         result = gray_to_bw(gray, 8, 1)
-        # 0=black, 1=white. Pixels >= 128 become 1.
+        # 0=black, 1=white. Pixels >= 64 become 1.
         # Bits: 0,0,0,1,1,1,0,1 = 0b00011101 = 0x1D
         assert result == bytes([0x1D])
 

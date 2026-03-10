@@ -395,7 +395,7 @@ class Scanner:
         source: ScanSource | None = None,
         progress: Callable[[int], bool] | None = None,
         next_page: Callable[[int], bool] | None = None,
-        image_format: ImageFormat = ImageFormat.JPEG,
+        image_format: ImageFormat | None = None,
         jpeg_quality: int = 85,
     ) -> ScannedDocument:
         """Scan a document and return PDF bytes.
@@ -409,8 +409,10 @@ class Scanner:
         to stop.
 
         *image_format* selects the encoding for page images inside the
-        PDF: :attr:`ImageFormat.JPEG` (default, smaller files) or
-        :attr:`ImageFormat.PNG` (lossless).
+        PDF: :attr:`ImageFormat.JPEG` (smaller files) or
+        :attr:`ImageFormat.PNG` (lossless).  When not specified, PNG is
+        used for BW mode (since 1-bit packs much smaller than JPEG) and
+        JPEG for everything else.
 
         *jpeg_quality* (1–100) controls JPEG compression quality; ignored
         when *image_format* is PNG.
@@ -469,7 +471,7 @@ def build_pdf(
     *,
     dpi: int = 300,
     color_mode: ColorMode = ColorMode.COLOR,
-    image_format: ImageFormat = ImageFormat.JPEG,
+    image_format: ImageFormat | None = None,
     jpeg_quality: int = 85,
 ) -> ScannedDocument:
     """Build a PDF from scanned pages.
@@ -479,12 +481,16 @@ def build_pdf(
     has been reordered, filtered, etc.
 
     *image_format* selects the encoding for page images inside the PDF:
-    :attr:`ImageFormat.JPEG` (default, smaller files) or
-    :attr:`ImageFormat.PNG` (lossless).  *jpeg_quality* (1–100) controls
-    JPEG compression; it is ignored when *image_format* is PNG.
+    :attr:`ImageFormat.JPEG` (smaller files) or :attr:`ImageFormat.PNG`
+    (lossless).  When not specified, PNG is used for BW mode (since
+    1-bit packs much smaller than JPEG) and JPEG for everything else.
+    *jpeg_quality* (1–100) controls JPEG compression; it is ignored
+    when the format is PNG.
 
     Returns a :class:`ScannedDocument` containing the PDF bytes.
     """
+    if image_format is None:
+        image_format = ImageFormat.PNG if color_mode == ColorMode.BW else ImageFormat.JPEG
     from _scanlib_accel import bw_to_gray, gray_to_bw, rgb_to_gray
 
     from ._jpeg import encode_jpeg
@@ -538,13 +544,7 @@ def build_pdf(
             else:
                 row_bytes = w
 
-            filtered = bytearray()
-            for y in range(h):
-                filtered.append(0)
-                src = y * row_bytes
-                filtered.extend(raw_pixels[src : src + row_bytes])
-
-            img_stream = zlib.compress(bytes(filtered))
+            img_stream = zlib.compress(raw_pixels[:row_bytes * h])
             filter_name = "/FlateDecode"
             pdf_bpc = 1 if mode == ColorMode.BW else 8
 

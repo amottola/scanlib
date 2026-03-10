@@ -132,7 +132,7 @@ static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
             int bits = width - x;
             if (bits > 8) bits = 8;
             for (int bit = 0; bit < bits; bit++) {
-                if (src[src_off + x + bit] >= 128)
+                if (src[src_off + x + bit] >= 64)
                     byte_val |= (unsigned char)(0x80 >> bit);
             }
             dst[dst_off + x / 8] = byte_val;
