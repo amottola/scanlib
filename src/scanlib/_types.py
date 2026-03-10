@@ -200,12 +200,17 @@ class ScannedDocument:
     """Result of a scan operation.
 
     ``data`` contains PDF file bytes (one or more pages).
+    ``width`` and ``height`` reflect the dimensions of the first page
+    in pixels.  Individual pages in the PDF may differ (e.g. after
+    rotation).
     """
 
     data: bytes
     page_count: int
     width: int
+    """Width of the first page in pixels."""
     height: int
+    """Height of the first page in pixels."""
     dpi: int
     color_mode: ColorMode
 
