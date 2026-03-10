@@ -6,7 +6,7 @@
 
 A multiplatform document scanning library for Python.
 
-scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding and pixel conversion are handled by a bundled C extension (using the [toojpeg](https://create.stephan-brumme.com/toojpeg/) library), while PDF assembly uses only the standard library. When [libjpeg-turbo](https://libjpeg-turbo.org/) is installed on the system, JPEG encoding is automatically accelerated via its SIMD-optimized path.
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding uses platform-native encoders (ImageIO on macOS, WIC on Windows, [libjpeg-turbo](https://libjpeg-turbo.org/) on Linux), pixel conversion is handled by a bundled C extension, and PDF assembly uses only the standard library.
 
 ## Requirements & Installation
 
@@ -20,12 +20,11 @@ Platform backends and their Python bindings are installed automatically by pip:
 
 | Platform | Backend | Python dependency | System requirement |
 |----------|---------|-------------------|--------------------|
-| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`) |
+| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`), `libjpeg-turbo` (`apt install libturbojpeg0-dev`) |
 | **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
 | **Windows 10+** | WIA ([comtypes](https://github.com/enthought/comtypes)) | `comtypes` (auto) | *none* |
 
-On macOS, JPEG encoding uses the built-in ImageIO framework automatically.
-On Linux and Windows, install [libjpeg-turbo](https://libjpeg-turbo.org/) for faster JPEG encoding (`apt install libturbojpeg0-dev` on Linux).
+JPEG encoding uses platform-native encoders automatically: ImageIO on macOS, WIC on Windows, and libjpeg-turbo on Linux.
 
 ## Quick Start
 

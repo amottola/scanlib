@@ -27,23 +27,29 @@ pip install -e ".[dev]"
 
 ## Architecture
 
-Scanlib is a multiplatform document scanning library. It provides a unified Python API across three platform-native backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), and WIA (Windows, comtypes).
+Scanlib is a multiplatform document scanning library. It provides a unified Python API across three platform-native backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), and WIA 2.0 (Windows, comtypes + ctypes).
 
 ### C accelerator extension (`_scanlib_accel`)
 
-A required CPython C++ extension provides the performance-critical functions:
+A required CPython C++ extension provides pixel conversion and BMP parsing:
 
-- **`encode_jpeg`** — JPEG encoding via vendored `toojpeg` (zlib license). Supports true 1-component grayscale and 4:2:0 chroma subsampling for RGB. Used as fallback when libjpeg-turbo is unavailable.
 - **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
+- **`rgb_to_bgr`** — RGB to BGR channel swap (used by WIC encoder on Windows)
 - **`gray_to_bw`** — grayscale to 1-bit packed conversion (threshold at 128)
 - **`trim_rows`** — removes row padding from raw scan data
 - **`bmp_to_raw`** — BMP file to raw pixel conversion (handles 1/8/24/32-bit BMPs, BGR→RGB swap, bottom-up reordering)
 
-The extension is built from `src/accel/_scanlib_accel.cpp` and `src/accel/toojpeg.cpp`. Build configuration is in `setup.py`. The GIL is released during computation in all functions. Thread safety for the toojpeg callback (which has no context parameter) is handled via `thread_local` storage.
+The extension is built from `src/accel/_scanlib_accel.cpp`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
 
-### JPEG acceleration (`_jpeg.py`)
+### JPEG encoding (`_jpeg.py`)
 
-`_jpeg.py` provides a unified `encode_jpeg()` that tries libjpeg-turbo (via ctypes to `libturbojpeg`) at import time and falls back to `_scanlib_accel.encode_jpeg` (toojpeg). The TurboJPEG path is ~16x faster due to SIMD. Library search uses `ctypes.util.find_library("turbojpeg")` plus platform-specific fallback paths. The module exposes `has_turbo: bool` to check which backend is active.
+`_jpeg.py` provides a unified `encode_jpeg()` using platform-native encoders with no fallback chain:
+
+- **macOS**: ImageIO framework (always available, via ctypes)
+- **Windows**: WIC — Windows Imaging Component (always available, via raw COM vtable calls with ctypes). Uses `IWICImagingFactory`/`IWICBitmapEncoder`/`IWICBitmapFrameEncode`. The factory is created lazily on first encode to avoid COM apartment conflicts with comtypes (which defaults to STA). Quality is set via `IPropertyBag2::Write` with `"ImageQuality"` property. Color images require RGB→BGR conversion via `rgb_to_bgr` from `_scanlib_accel`.
+- **Linux**: libjpeg-turbo (required at runtime, via ctypes to `libturbojpeg`)
+
+The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` directly for each platform — no dispatch function or boolean flags.
 
 ### Backend selection and thread dispatch
 
@@ -87,11 +93,26 @@ Key implementation details:
 - Open sessions are tracked via a simple `_open_sessions` set (no delegate caching needed)
 - The scanner may return extra components (e.g. 4-component RGBX for RGB mode); `_assemble_image()` strips the extra channel
 
+### WIA 2.0 streamed transfer
+
+The WIA backend uses the WIA 2.0 low-level COM interfaces (`IWiaTransfer` + `IWiaTransferCallback`) for streamed, memory-based transfers with progress reporting. COM interface definitions are declared using comtypes with vtable order verified against the Windows SDK `wia_lh.h` header.
+
+Key interfaces:
+- **`IWiaDevMgr2`** — device enumeration (`EnumDeviceInfo`) and connection (`CreateDevice`)
+- **`IWiaPropertyStorage`** — property access via `ReadMultiple`/`WriteMultiple`/`GetPropertyAttributes` with `PROPSPEC`/`PROPVARIANT` ctypes structures
+- **`IWiaItem2`** — represents device/scan items; `EnumChildItems` to get scannable items
+- **`IWiaTransfer`** — `Download()` initiates a blocking scan that invokes callbacks
+- **`IWiaTransferCallback`** — implemented as a `comtypes.COMObject`; `TransferCallback` receives progress (`lPercentComplete` 0-100), `GetNextStream` is called once per page to provide a memory-backed `IStream` (via `CreateStreamOnHGlobal`)
+
+Transfer flow: `Download()` blocks while invoking `GetNextStream` (once per page) and `TransferCallback` (progress + end-of-stream signals). On `END_OF_STREAM`, the BMP data is read from the `IStream` via `GetHGlobalFromStream` and converted to raw pixels using `_bmp_to_raw` from the C++ accelerator extension. BMP format is used for maximum device compatibility.
+
+The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `ctypes.windll`) with try/except and provides stubs so it can be imported on non-Windows for testing.
+
 ## Conventions
 
 - All page sizes are in 1/10 millimeters (e.g., A4 = `PageSize(2100, 2970)`)
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- JPEG encoding goes through `_jpeg.py` (libjpeg-turbo if available, toojpeg fallback); pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`) using stdlib `zlib` for the PNG path
+- JPEG encoding goes through `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg-turbo on Linux); pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`) using stdlib `zlib` for the PNG path
 - `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, `build_pdf()`, and shared utilities (`check_progress`, `MM_PER_INCH`)

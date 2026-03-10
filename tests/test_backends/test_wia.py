@@ -2,59 +2,72 @@ from unittest import mock
 
 import pytest
 
-from scanlib._types import ColorMode, ScanError, Scanner, ScanOptions, ScanSource
+from scanlib._types import (
+    ColorMode,
+    PageSize,
+    ScanError,
+    ScanOptions,
+    ScanSource,
+)
+
+# WIA property IDs used in tests
+_WIA_DIP_DEV_ID = 2
+_WIA_DIP_DEV_NAME = 7
+_WIA_DIP_DEV_TYPE = 5
+_WIA_DIP_VEND_DESC = 3
 
 
-def _make_mock_property(prop_id, value, sub_type=None, **kwargs):
-    """Create a mock WIA property."""
-    p = mock.MagicMock()
-    p.PropertyID = prop_id
-    p.Value = value
-    p.SubType = sub_type
-    for k, v in kwargs.items():
-        setattr(p, k, v)
-    return p
+def _make_mock_enum(storages):
+    """Create a mock IEnumWIA_DEV_INFO with GetCount/Next."""
+    enum = mock.MagicMock()
+    enum.GetCount.return_value = len(storages)
+    returns = [(s, 1) for s in storages] + [(None, 0)]
+    enum.Next.side_effect = returns
+    return enum
 
 
-def _make_mock_properties(prop_list):
-    """Create a mock WIA Properties collection (1-based indexing)."""
-    props = mock.MagicMock()
-    props.Count = len(prop_list)
-    props.Item = mock.MagicMock(side_effect=lambda i: prop_list[i - 1])
-    return props
+def _make_mock_storage(props):
+    """Create a mock IWiaPropertyStorage with a _test_props dict."""
+    storage = mock.MagicMock()
+    storage._test_props = props
+    return storage
 
 
-@pytest.fixture(autouse=True)
-def mock_comtypes():
-    """Provide mock comtypes modules so tests work on any platform."""
-    mock_ct = mock.MagicMock()
-    mock_ct_client = mock.MagicMock()
-    with mock.patch.dict("sys.modules", {
-        "comtypes": mock_ct,
-        "comtypes.client": mock_ct_client,
-    }):
-        yield mock_ct, mock_ct_client
+def _make_device_storages(devices):
+    """Create mock storages for a list of (name, vendor, dev_type) tuples."""
+    storages = []
+    for i, (name, vendor, dev_type) in enumerate(devices):
+        props = {
+            _WIA_DIP_DEV_TYPE: dev_type,
+            _WIA_DIP_DEV_ID: f"device_{i}",
+            _WIA_DIP_DEV_NAME: name,
+            _WIA_DIP_VEND_DESC: vendor,
+        }
+        storages.append(_make_mock_storage(props))
+    return storages
 
 
-def _make_device_info(name, vendor=None, dev_type=1):
-    """Create a mock WIA DeviceInfo object."""
-    name_prop = _make_mock_property(7, name)
-    vendor_prop = _make_mock_property(3, vendor)
-    props = _make_mock_properties([vendor_prop, name_prop])
-    di = mock.MagicMock()
-    di.Type = dev_type
-    di.Properties = props
-    return di
+def _read_prop_from_mock(storage, prop_id, default=None):
+    """Side effect for _read_prop that reads from mock _test_props."""
+    props = getattr(storage, "_test_props", {})
+    return props.get(prop_id, default)
 
 
-def _make_device_manager(device_infos):
-    """Create a mock WIA DeviceManager with given DeviceInfo list."""
+def _make_open_scanner_dm():
+    """Create a mock device manager with root item and child item for open_scanner tests."""
+    storages = _make_device_storages([("Scanner A", None, 1)])
     dm = mock.MagicMock()
-    dm.DeviceInfos.Count = len(device_infos)
-    dm.DeviceInfos.Item = mock.MagicMock(
-        side_effect=lambda i: device_infos[i - 1]
-    )
+    dm.EnumDeviceInfo.return_value = _make_mock_enum(storages)
+    root_item = mock.MagicMock()
+    dm.CreateDevice.return_value = root_item
+    child_item = mock.MagicMock()
+    enum_items = mock.MagicMock()
+    enum_items.Next.return_value = (child_item, 1)
+    root_item.EnumChildItems.return_value = enum_items
     return dm
+
+
+_WIA_MODULE = "scanlib.backends._wia"
 
 
 class TestWiaBackend:
@@ -65,30 +78,41 @@ class TestWiaBackend:
         backend._create_device_manager = mock.MagicMock(return_value=dm)
         return backend
 
-    def test_list_scanners(self):
-        di_a = _make_device_info("Scanner A", "Vendor A")
-        di_b = _make_device_info("Scanner B")
-        dm = _make_device_manager([di_a, di_b])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_list_scanners(self, _mock_rp):
+        storages = _make_device_storages([
+            ("Scanner A", "Vendor A", 1),
+            ("Scanner B", None, 1),
+        ])
+        dm = mock.MagicMock()
+        dm.EnumDeviceInfo.return_value = _make_mock_enum(storages)
 
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
 
         assert len(scanners) == 2
         assert scanners[0].name == "Scanner A"
+        assert scanners[0].vendor == "Vendor A"
         assert scanners[0].backend == "wia"
         assert scanners[1].name == "Scanner B"
 
-    def test_list_scanners_empty(self):
-        dm = _make_device_manager([])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_list_scanners_empty(self, _mock_rp):
+        dm = mock.MagicMock()
+        dm.EnumDeviceInfo.return_value = _make_mock_enum([])
 
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
         assert scanners == []
 
-    def test_list_scanners_filters_non_scanners(self):
-        di_scanner = _make_device_info("Scanner A", dev_type=1)
-        di_camera = _make_device_info("Camera X", dev_type=2)
-        dm = _make_device_manager([di_scanner, di_camera])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_list_scanners_filters_non_scanners(self, _mock_rp):
+        storages = _make_device_storages([
+            ("Scanner A", None, 1),    # scanner (STI type 1)
+            ("Camera X", None, 2),     # not a scanner
+        ])
+        dm = mock.MagicMock()
+        dm.EnumDeviceInfo.return_value = _make_mock_enum(storages)
 
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
@@ -96,23 +120,17 @@ class TestWiaBackend:
         assert len(scanners) == 1
         assert scanners[0].name == "Scanner A"
 
-    def test_open_scanner_queries_sources(self):
-        di = _make_device_info("Scanner A")
-        dm = _make_device_manager([di])
-
-        # Device with flatbed + feeder capabilities
-        mock_device = mock.MagicMock()
-        caps_prop = _make_mock_property(3086, 0x003)  # FLAT | FEED
-        max_h = _make_mock_property(3074, 8500)
-        max_v = _make_mock_property(3075, 11690)
-        mock_device.Properties = _make_mock_properties([caps_prop, max_h, max_v])
-        mock_device.Items = mock.MagicMock(
-            side_effect=lambda i: mock.MagicMock(
-                Properties=_make_mock_properties([])
-            )
-        )
-        di.Connect.return_value = mock_device
-
+    @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
+                return_value=[ScanSource.FLATBED, ScanSource.FEEDER])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_open_scanner_queries_sources(
+        self, _rp, _src, _ps, _res, _cm, _def
+    ):
+        dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
@@ -120,69 +138,57 @@ class TestWiaBackend:
         assert ScanSource.FLATBED in scanners[0]._sources
         assert ScanSource.FEEDER in scanners[0]._sources
 
-    def test_open_scanner_queries_max_page_sizes(self):
-        di = _make_device_info("Scanner A")
-        dm = _make_device_manager([di])
-
-        mock_device = mock.MagicMock()
-        caps_prop = _make_mock_property(3086, 0x001)  # FLAT only
-        max_h = _make_mock_property(3074, 8500)   # 8.5 inches
-        max_v = _make_mock_property(3075, 11690)  # 11.69 inches
-        mock_device.Properties = _make_mock_properties([caps_prop, max_h, max_v])
-        mock_device.Items = mock.MagicMock(
-            side_effect=lambda i: mock.MagicMock(
-                Properties=_make_mock_properties([])
-            )
-        )
-        di.Connect.return_value = mock_device
-
+    @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size",
+                return_value=PageSize(width=2159, height=2970))
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
+                return_value=[ScanSource.FLATBED])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_open_scanner_queries_max_page_sizes(
+        self, _rp, _src, _ps, _res, _cm, _def
+    ):
+        dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
         sizes = scanners[0]._max_page_sizes
         assert ScanSource.FLATBED in sizes
-        assert sizes[ScanSource.FLATBED].width == 2159   # ceil(8500 * 0.254)
-        assert sizes[ScanSource.FLATBED].height == 2970  # ceil(11690 * 0.254)
+        assert sizes[ScanSource.FLATBED].width == 2159
+        assert sizes[ScanSource.FLATBED].height == 2970
 
-    def test_open_scanner_queries_resolutions(self):
-        di = _make_device_info("Scanner A")
-        dm = _make_device_manager([di])
-
-        mock_device = mock.MagicMock()
-        caps_prop = _make_mock_property(3086, 0x001)
-        mock_device.Properties = _make_mock_properties([caps_prop])
-
-        xres_prop = _make_mock_property(
-            6147, 300, sub_type=2, SubTypeValues=[150, 300, 600]
-        )
-        mock_item = mock.MagicMock()
-        mock_item.Properties = _make_mock_properties([xres_prop])
-        mock_device.Items = mock.MagicMock(side_effect=lambda i: mock_item)
-        di.Connect.return_value = mock_device
-
+    @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions",
+                return_value=[150, 300, 600])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
+                return_value=[ScanSource.FLATBED])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_open_scanner_queries_resolutions(
+        self, _rp, _src, _ps, _res, _cm, _def
+    ):
+        dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
         assert scanners[0]._resolutions == [150, 300, 600]
 
-    def test_open_scanner_queries_color_modes(self):
-        di = _make_device_info("Scanner A")
-        dm = _make_device_manager([di])
-
-        mock_device = mock.MagicMock()
-        caps_prop = _make_mock_property(3086, 0x001)
-        mock_device.Properties = _make_mock_properties([caps_prop])
-
-        dt_prop = _make_mock_property(
-            4103, 3, sub_type=2, SubTypeValues=[0, 2, 3]
-        )
-        mock_item = mock.MagicMock()
-        mock_item.Properties = _make_mock_properties([dt_prop])
-        mock_device.Items = mock.MagicMock(side_effect=lambda i: mock_item)
-        di.Connect.return_value = mock_device
-
+    @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes",
+                return_value=[ColorMode.BW, ColorMode.GRAY, ColorMode.COLOR])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_resolutions", return_value=[300])
+    @mock.patch(f"{_WIA_MODULE}._read_wia_max_page_size", return_value=None)
+    @mock.patch(f"{_WIA_MODULE}._read_wia_sources",
+                return_value=[ScanSource.FLATBED])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_open_scanner_queries_color_modes(
+        self, _rp, _src, _ps, _res, _cm, _def
+    ):
+        dm = _make_open_scanner_dm()
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
@@ -191,9 +197,11 @@ class TestWiaBackend:
         assert ColorMode.GRAY in scanners[0]._color_modes
         assert ColorMode.COLOR in scanners[0]._color_modes
 
-    def test_scan_pages_not_open_raises(self):
-        di = _make_device_info("Scanner A")
-        dm = _make_device_manager([di])
+    @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
+    def test_scan_pages_not_open_raises(self, _mock_rp):
+        storages = _make_device_storages([("Scanner A", None, 1)])
+        dm = mock.MagicMock()
+        dm.EnumDeviceInfo.return_value = _make_mock_enum(storages)
 
         backend = self._make_backend(dm)
         scanners = backend.list_scanners()

@@ -1,14 +1,59 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import queue
 import threading
 from collections.abc import Iterator
+from ctypes import HRESULT, POINTER, Structure, Union, byref, c_long, c_ulong
+from ctypes import c_ulonglong, c_ushort, c_void_p
 
-import comtypes
-import comtypes.client
+try:
+    import comtypes
+    from comtypes import COMMETHOD, GUID, COMObject, IUnknown
+except ImportError:
+    # Stubs so the module can be imported on non-Windows for testing
+    class GUID:  # type: ignore[no-redef]
+        def __init__(self, s: str = "") -> None:
+            pass
 
-from _scanlib_accel import bmp_to_raw as _bmp_to_raw
+    class IUnknown:  # type: ignore[no-redef]
+        _iid_ = None
+
+    class COMObject:  # type: ignore[no-redef]
+        pass
+
+    def COMMETHOD(*args, **kwargs):  # type: ignore[no-redef]
+        return None
+
+    class _ComtypesStub:
+        GUID = GUID
+        IUnknown = IUnknown
+        COMObject = COMObject
+        COMMETHOD = staticmethod(COMMETHOD)
+        BSTR = c_void_p
+        CLSCTX_LOCAL_SERVER = 4
+
+        @staticmethod
+        def CoInitialize() -> None:
+            pass
+
+        @staticmethod
+        def CoCreateInstance(*a: object, **kw: object) -> None:
+            pass
+
+    comtypes = _ComtypesStub()  # type: ignore[assignment]
+
+try:
+    import ctypes.wintypes as wt
+    _HAS_WIN32 = True
+except (ImportError, ValueError):
+    _HAS_WIN32 = False
+
+try:
+    from _scanlib_accel import bmp_to_raw as _bmp_to_raw
+except ImportError:
+    _bmp_to_raw = None  # type: ignore[assignment]
 
 from .._types import (
     DISCOVERY_TIMEOUT,
@@ -25,19 +70,20 @@ from .._types import (
     check_progress,
 )
 
-# --- WIA constants ---
+# ---------------------------------------------------------------------------
+# WIA property IDs
+# ---------------------------------------------------------------------------
 
-# Device-level property IDs
+_WIA_DIP_DEV_ID = 2
 _WIA_DIP_DEV_NAME = 7
+_WIA_DIP_DEV_TYPE = 5
 _WIA_DIP_VEND_DESC = 3
 
-# Document handling
 _WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES = 3086
 _WIA_DPS_DOCUMENT_HANDLING_SELECT = 3088
-_WIA_DPS_MAX_HORIZONTAL_SIZE = 3074  # thousandths of inch
-_WIA_DPS_MAX_VERTICAL_SIZE = 3075    # thousandths of inch
+_WIA_DPS_MAX_HORIZONTAL_SIZE = 3074
+_WIA_DPS_MAX_VERTICAL_SIZE = 3075
 
-# Item-level property IDs
 _WIA_IPS_XRES = 6147
 _WIA_IPS_YRES = 6148
 _WIA_IPS_XPOS = 6149
@@ -45,30 +91,50 @@ _WIA_IPS_YPOS = 6150
 _WIA_IPS_XEXTENT = 6151
 _WIA_IPS_YEXTENT = 6152
 _WIA_IPA_DATATYPE = 4103
+_WIA_IPA_FORMAT = 4106
 _WIA_IPS_PAGES = 3096
 
-# DataType values
 _WIA_DATA_BW = 0
 _WIA_DATA_GRAY = 2
 _WIA_DATA_COLOR = 3
 
-# DocHandlingCaps flags
 _FLAT = 0x001
 _FEED = 0x002
-
-# DocHandlingSelect values
 _FLATBED = 1
 _FEEDER = 2
 
-# Property SubType constants
-_WIA_PROP_RANGE = 1
-_WIA_PROP_LIST = 2
+_WIA_FORMAT_BMP = GUID("{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}")
 
-# BMP format GUID for Transfer()
-_WIA_FORMAT_BMP = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}"
-
-# HRESULT error codes (as signed int32)
 _WIA_ERROR_PAPER_EMPTY = -2145320957  # 0x80210003
+
+# Property attribute flags (from WiaDef.h)
+_WIA_PROP_RANGE = 0x10
+_WIA_PROP_LIST = 0x20
+
+# WIA transfer message constants
+_WIA_TRANSFER_MSG_STATUS = 0x00001
+_WIA_TRANSFER_MSG_END_OF_STREAM = 0x00002
+_WIA_TRANSFER_MSG_DEVICE_STATUS = 0x00005
+
+# Device type
+_StiDeviceTypeScanner = 1
+
+# Enumeration flags
+_WIA_DEVINFO_ENUM_LOCAL = 0x10
+
+_S_OK = 0
+
+# PROPVARIANT type tags
+_VT_EMPTY = 0
+_VT_I2 = 2
+_VT_I4 = 3
+_VT_BSTR = 8
+_VT_UI2 = 18
+_VT_UI4 = 19
+_VT_VECTOR = 0x1000
+
+# PROPSPEC kind
+_PRSPEC_PROPID = 1
 
 # Mappings
 _WIA_DATATYPE_TO_COLOR = {
@@ -76,82 +142,401 @@ _WIA_DATATYPE_TO_COLOR = {
     _WIA_DATA_GRAY: ColorMode.GRAY,
     _WIA_DATA_COLOR: ColorMode.COLOR,
 }
-
 _COLOR_TO_WIA_DATATYPE = {v: k for k, v in _WIA_DATATYPE_TO_COLOR.items()}
 
-_MM10_PER_THOUSANDTH_INCH = 0.254  # 25.4 mm/inch / 100
+_MM10_PER_THOUSANDTH_INCH = 0.254
+
+# ---------------------------------------------------------------------------
+# ctypes structures for OLE property access
+# ---------------------------------------------------------------------------
 
 
-# --- Helpers ---
+class _PROPSPEC(Structure):
+    _fields_ = [("ulKind", c_ulong), ("propid", c_ulong)]
 
 
-def _get_property(properties: object, prop_id: int) -> object | None:
-    """Find a WIA property by PropertyID (1-based iteration)."""
-    for i in range(1, properties.Count + 1):
-        prop = properties.Item(i)
-        if prop.PropertyID == prop_id:
-            return prop
-    return None
+class _CAL(Structure):
+    """Counted array of LONGs (VT_VECTOR|VT_I4)."""
+
+    _fields_ = [("cElems", c_ulong), ("pElems", POINTER(c_long))]
 
 
-def _get_property_value(properties: object, prop_id: int, default: object = None) -> object:
-    """Get the value of a WIA property by ID."""
-    prop = _get_property(properties, prop_id)
-    if prop is not None:
-        return prop.Value
+class _CAUL(Structure):
+    """Counted array of ULONGs (VT_VECTOR|VT_UI4)."""
+
+    _fields_ = [("cElems", c_ulong), ("pElems", POINTER(c_ulong))]
+
+
+class _PV_Union(Union):
+    _fields_ = [
+        ("lVal", c_long),
+        ("ulVal", c_ulong),
+        ("iVal", ctypes.c_short),
+        ("uiVal", ctypes.c_ushort),
+        ("bstrVal", c_void_p),
+        ("cal", _CAL),
+        ("caul", _CAUL),
+    ]
+
+
+class _PROPVARIANT(Structure):
+    _fields_ = [
+        ("vt", c_ushort),
+        ("wReserved1", c_ushort),
+        ("wReserved2", c_ushort),
+        ("wReserved3", c_ushort),
+        ("_value", _PV_Union),
+    ]
+
+
+class _WiaTransferParams(Structure):
+    _fields_ = [
+        ("lMessage", c_long),
+        ("lPercentComplete", c_long),
+        ("ulTransferredBytes", c_ulonglong),
+        ("hrErrorStatus", HRESULT),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# COM interface definitions (vtable order from wia_lh.h)
+# ---------------------------------------------------------------------------
+
+# Forward declarations
+class IWiaPropertyStorage(IUnknown):
+    _iid_ = GUID("{98B5E8A0-29CC-491a-AAC0-E6DB4FDCCEB6}")
+
+
+class IEnumWIA_DEV_INFO(IUnknown):
+    _iid_ = GUID("{5e38b83c-8cf1-11d1-bf92-0060081ed811}")
+
+
+class IEnumWiaItem2(IUnknown):
+    _iid_ = GUID("{59970AF4-CD0D-44d9-AB24-52295630E582}")
+
+
+class IWiaItem2(IUnknown):
+    _iid_ = GUID("{6CBA0075-1287-407d-9B77-CF0E030435CC}")
+
+
+class IWiaTransferCallback(IUnknown):
+    _iid_ = GUID("{27d4eaaf-28a6-4ca5-9aab-e678168b9527}")
+
+
+class IStream(IUnknown):
+    _iid_ = GUID("{0000000C-0000-0000-C000-000000000046}")
+
+
+class IWiaTransfer(IUnknown):
+    _iid_ = GUID("{c39d6942-2f4e-4d04-92fe-4ef4d3a1de5a}")
+
+
+class IWiaDevMgr2(IUnknown):
+    _iid_ = GUID("{79C07CF1-CBDD-41ee-8EC3-F00080CADA7A}")
+
+
+_CLSID_WiaDevMgr2 = GUID("{B6C292BC-7C88-41ee-8B54-8EC92617E599}")
+
+# --- IEnumWIA_DEV_INFO methods (vtable slots 3-7) ---
+IEnumWIA_DEV_INFO._methods_ = [
+    COMMETHOD([], HRESULT, "Next",
+              (["in"], c_ulong, "celt"),
+              (["out"], POINTER(POINTER(IWiaPropertyStorage)), "rgelt"),
+              (["out"], POINTER(c_ulong), "pceltFetched")),
+    COMMETHOD([], HRESULT, "Skip",
+              (["in"], c_ulong, "celt")),
+    COMMETHOD([], HRESULT, "Reset"),
+    COMMETHOD([], HRESULT, "Clone",
+              (["out"], POINTER(POINTER(IEnumWIA_DEV_INFO)), "ppIEnum")),
+    COMMETHOD([], HRESULT, "GetCount",
+              (["out"], POINTER(c_ulong), "celt")),
+]
+
+# --- IWiaPropertyStorage methods (vtable slots 3-17) ---
+# Extends IUnknown directly in WIA (not IPropertyStorage, despite similar API)
+IWiaPropertyStorage._methods_ = [
+    # [3] ReadMultiple
+    COMMETHOD([], HRESULT, "ReadMultiple",
+              (["in"], c_ulong, "cpspec"),
+              (["in"], POINTER(_PROPSPEC), "rgpspec"),
+              (["out"], POINTER(_PROPVARIANT), "rgpropvar")),
+    # [4] WriteMultiple
+    COMMETHOD([], HRESULT, "WriteMultiple",
+              (["in"], c_ulong, "cpspec"),
+              (["in"], POINTER(_PROPSPEC), "rgpspec"),
+              (["in"], POINTER(_PROPVARIANT), "rgpropvar"),
+              (["in"], c_ulong, "propidNameFirst")),
+    # [5] DeleteMultiple
+    COMMETHOD([], HRESULT, "DeleteMultiple",
+              (["in"], c_ulong, "cpspec"),
+              (["in"], POINTER(_PROPSPEC), "rgpspec")),
+    # [6] ReadPropertyNames
+    COMMETHOD([], HRESULT, "ReadPropertyNames",
+              (["in"], c_ulong, "cpropid"),
+              (["in"], POINTER(c_ulong), "rgpropid"),
+              (["out"], POINTER(c_void_p), "rglpwstrName")),
+    # [7] WritePropertyNames
+    COMMETHOD([], HRESULT, "WritePropertyNames",
+              (["in"], c_ulong, "cpropid"),
+              (["in"], POINTER(c_ulong), "rgpropid"),
+              (["in"], POINTER(c_void_p), "rglpwstrName")),
+    # [8] DeletePropertyNames
+    COMMETHOD([], HRESULT, "DeletePropertyNames",
+              (["in"], c_ulong, "cpropid"),
+              (["in"], POINTER(c_ulong), "rgpropid")),
+    # [9] Commit
+    COMMETHOD([], HRESULT, "Commit",
+              (["in"], c_ulong, "grfCommitFlags")),
+    # [10] Revert
+    COMMETHOD([], HRESULT, "Revert"),
+    # [11] Enum
+    COMMETHOD([], HRESULT, "Enum",
+              (["out"], POINTER(c_void_p), "ppenum")),
+    # [12] SetTimes
+    COMMETHOD([], HRESULT, "SetTimes",
+              (["in"], c_void_p, "pctime"),
+              (["in"], c_void_p, "patime"),
+              (["in"], c_void_p, "pmtime")),
+    # [13] SetClass
+    COMMETHOD([], HRESULT, "SetClass",
+              (["in"], POINTER(GUID), "clsid")),
+    # [14] Stat
+    COMMETHOD([], HRESULT, "Stat",
+              (["out"], c_void_p, "pstatpsstg")),
+    # [15] GetPropertyAttributes (WIA extension)
+    COMMETHOD([], HRESULT, "GetPropertyAttributes",
+              (["in"], c_ulong, "cpspec"),
+              (["in"], POINTER(_PROPSPEC), "rgpspec"),
+              (["out"], POINTER(c_ulong), "rgflags"),
+              (["out"], POINTER(_PROPVARIANT), "rgpropvar")),
+    # [16] GetCount (WIA extension)
+    COMMETHOD([], HRESULT, "GetCount",
+              (["out"], POINTER(c_ulong), "pulNumProps")),
+    # [17] GetPropertyStream
+    COMMETHOD([], HRESULT, "GetPropertyStream",
+              (["out"], POINTER(GUID), "pCompatibilityId"),
+              (["out"], POINTER(POINTER(IStream)), "ppIStream")),
+    # [18] SetPropertyStream
+    COMMETHOD([], HRESULT, "SetPropertyStream",
+              (["in"], POINTER(GUID), "pCompatibilityId"),
+              (["in"], POINTER(IStream), "pIStream")),
+]
+
+# --- IEnumWiaItem2 methods (vtable slots 3-7) ---
+IEnumWiaItem2._methods_ = [
+    COMMETHOD([], HRESULT, "Next",
+              (["in"], c_ulong, "cElt"),
+              (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2"),
+              (["out"], POINTER(c_ulong), "pcEltFetched")),
+    COMMETHOD([], HRESULT, "Skip",
+              (["in"], c_ulong, "cElt")),
+    COMMETHOD([], HRESULT, "Reset"),
+    COMMETHOD([], HRESULT, "Clone",
+              (["out"], POINTER(POINTER(IEnumWiaItem2)), "ppIEnum")),
+    COMMETHOD([], HRESULT, "GetCount",
+              (["out"], POINTER(c_ulong), "cElt")),
+]
+
+# --- IWiaItem2 methods (vtable slots 3-18+) ---
+IWiaItem2._methods_ = [
+    # [3] CreateChildItem
+    COMMETHOD([], HRESULT, "CreateChildItem",
+              (["in"], c_long, "lItemFlags"),
+              (["in"], c_long, "lCreationFlags"),
+              (["in"], comtypes.BSTR, "bstrItemName"),
+              (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2")),
+    # [4] DeleteItem
+    COMMETHOD([], HRESULT, "DeleteItem",
+              (["in"], c_long, "lFlags")),
+    # [5] EnumChildItems
+    COMMETHOD([], HRESULT, "EnumChildItems",
+              (["in"], POINTER(GUID), "pCategoryGUID"),
+              (["out"], POINTER(POINTER(IEnumWiaItem2)), "ppIEnumWiaItem2")),
+    # [6] FindItemByName
+    COMMETHOD([], HRESULT, "FindItemByName",
+              (["in"], c_long, "lFlags"),
+              (["in"], comtypes.BSTR, "bstrFullItemName"),
+              (["out"], POINTER(POINTER(IWiaItem2)), "ppIWiaItem2")),
+    # [7] GetItemCategory
+    COMMETHOD([], HRESULT, "GetItemCategory",
+              (["out"], POINTER(GUID), "pItemCategoryGUID")),
+    # [8] GetItemType
+    COMMETHOD([], HRESULT, "GetItemType",
+              (["out"], POINTER(c_long), "pItemType")),
+]
+
+# --- IWiaTransfer methods (vtable slots 3-6) ---
+IWiaTransfer._methods_ = [
+    COMMETHOD([], HRESULT, "Download",
+              (["in"], c_long, "lFlags"),
+              (["in"], POINTER(IWiaTransferCallback), "pIWiaTransferCallback")),
+    COMMETHOD([], HRESULT, "Upload",
+              (["in"], c_long, "lFlags"),
+              (["in"], POINTER(IStream), "pSource"),
+              (["in"], POINTER(IWiaTransferCallback), "pIWiaTransferCallback")),
+    COMMETHOD([], HRESULT, "Cancel"),
+    COMMETHOD([], HRESULT, "EnumWIA_FORMAT_INFO",
+              (["out"], POINTER(c_void_p), "ppEnum")),
+]
+
+# --- IWiaTransferCallback methods (vtable slots 3-4) ---
+IWiaTransferCallback._methods_ = [
+    COMMETHOD([], HRESULT, "TransferCallback",
+              (["in"], c_long, "lFlags"),
+              (["in"], POINTER(_WiaTransferParams), "pWiaTransferParams")),
+    COMMETHOD([], HRESULT, "GetNextStream",
+              (["in"], c_long, "lFlags"),
+              (["in"], comtypes.BSTR, "bstrItemName"),
+              (["in"], comtypes.BSTR, "bstrFullItemName"),
+              (["out"], POINTER(POINTER(IStream)), "ppDestination")),
+]
+
+# --- IWiaDevMgr2 methods (vtable slots 3+) ---
+IWiaDevMgr2._methods_ = [
+    # [3] EnumDeviceInfo
+    COMMETHOD([], HRESULT, "EnumDeviceInfo",
+              (["in"], c_long, "lFlags"),
+              (["out"], POINTER(POINTER(IEnumWIA_DEV_INFO)), "ppIEnum")),
+    # [4] CreateDevice
+    COMMETHOD([], HRESULT, "CreateDevice",
+              (["in"], c_long, "lFlags"),
+              (["in"], comtypes.BSTR, "bstrDeviceID"),
+              (["out"], POINTER(POINTER(IWiaItem2)), "ppWiaItem2Root")),
+]
+
+
+# ---------------------------------------------------------------------------
+# Property helpers
+# ---------------------------------------------------------------------------
+
+if _HAS_WIN32:
+    _ole32 = ctypes.windll.ole32
+    _kernel32 = ctypes.windll.kernel32
+
+    _ole32.CreateStreamOnHGlobal.restype = HRESULT
+    _ole32.GetHGlobalFromStream.restype = HRESULT
+    _kernel32.GlobalSize.restype = ctypes.c_size_t
+    _kernel32.GlobalSize.argtypes = [c_void_p]
+    _kernel32.GlobalLock.restype = c_void_p
+    _kernel32.GlobalLock.argtypes = [c_void_p]
+    _kernel32.GlobalUnlock.argtypes = [c_void_p]
+
+
+def _make_propspec(prop_id: int) -> _PROPSPEC:
+    ps = _PROPSPEC()
+    ps.ulKind = _PRSPEC_PROPID
+    ps.propid = prop_id
+    return ps
+
+
+def _read_prop(storage, prop_id: int, default: object = None) -> object:
+    """Read a single property value (int or str)."""
+    spec = _make_propspec(prop_id)
+    try:
+        var = storage.ReadMultiple(1, byref(spec))
+    except Exception:
+        return default
+    vt = var.vt
+    if vt in (_VT_I4, _VT_I2):
+        return var._value.lVal
+    if vt in (_VT_UI4, _VT_UI2):
+        return var._value.ulVal
+    if vt == _VT_BSTR and var._value.bstrVal:
+        return ctypes.wstring_at(var._value.bstrVal)
+    if vt == _VT_EMPTY:
+        return default
     return default
 
 
-def _read_wia_resolutions(item: object) -> list[int]:
-    """Read supported DPI values from a WIA item."""
-    prop = _get_property(item.Properties, _WIA_IPS_XRES)
-    if prop is None:
-        return []
-    try:
-        if prop.SubType == _WIA_PROP_RANGE:
-            lo, hi, step = prop.SubTypeMin, prop.SubTypeMax, prop.SubTypeStep
-            step = max(1, step)
-            if (hi - lo) // step <= 1000:
-                return list(range(lo, hi + 1, step))
-            # Too many values; sample a reasonable subset
-            return list(range(lo, hi + 1, (hi - lo) // 20))
-        if prop.SubType == _WIA_PROP_LIST:
-            return sorted(int(v) for v in prop.SubTypeValues)
-    except Exception:
-        pass
-    try:
-        return [int(prop.Value)]
-    except Exception:
-        return []
+def _write_prop(storage, prop_id: int, value: int) -> None:
+    """Write a single LONG property."""
+    spec = _make_propspec(prop_id)
+    var = _PROPVARIANT()
+    var.vt = _VT_I4
+    var._value.lVal = value
+    storage.WriteMultiple(1, byref(spec), byref(var), 2)
 
 
-def _read_wia_color_modes(item: object) -> list[ColorMode]:
-    """Read supported color modes from a WIA item."""
-    prop = _get_property(item.Properties, _WIA_IPA_DATATYPE)
-    if prop is None:
-        return []
+def _write_prop_guid(storage, prop_id: int, value: GUID) -> None:
+    """Write a GUID property (e.g. WIA_IPA_FORMAT) as a CLSID PROPVARIANT."""
+    # VT_CLSID = 72; the value is a pointer to a GUID
+    spec = _make_propspec(prop_id)
+    var = _PROPVARIANT()
+    var.vt = 72  # VT_CLSID
+    guid_copy = GUID()
+    ctypes.memmove(byref(guid_copy), byref(value), ctypes.sizeof(GUID))
+    var._value.bstrVal = ctypes.cast(ctypes.pointer(guid_copy), c_void_p).value
+    storage.WriteMultiple(1, byref(spec), byref(var), 2)
+
+
+def _read_prop_attributes(
+    storage, prop_id: int
+) -> tuple[int, list[int]]:
+    """Read property attributes (flags and valid values).
+
+    Returns (flags, values) where values is a list of ints for
+    WIA_PROP_LIST or [min, max, step] for WIA_PROP_RANGE.
+    """
+    spec = _make_propspec(prop_id)
     try:
-        if prop.SubType == _WIA_PROP_LIST:
-            modes: list[ColorMode] = []
-            for v in prop.SubTypeValues:
-                mapped = _WIA_DATATYPE_TO_COLOR.get(int(v))
-                if mapped is not None and mapped not in modes:
-                    modes.append(mapped)
-            return modes
+        flags_val, var = storage.GetPropertyAttributes(1, byref(spec))
     except Exception:
-        pass
-    try:
-        mapped = _WIA_DATATYPE_TO_COLOR.get(int(prop.Value))
+        return (0, [])
+
+    result: list[int] = []
+    flags_int = int(flags_val)
+    vt = var.vt
+    if vt == (_VT_VECTOR | _VT_I4) and var._value.cal.cElems > 0:
+        n = var._value.cal.cElems
+        result = [var._value.cal.pElems[i] for i in range(n)]
+    elif vt == (_VT_VECTOR | _VT_UI4) and var._value.caul.cElems > 0:
+        n = var._value.caul.cElems
+        result = [var._value.caul.pElems[i] for i in range(n)]
+    return (flags_int, result)
+
+
+# ---------------------------------------------------------------------------
+# Capability readers
+# ---------------------------------------------------------------------------
+
+
+def _read_wia_resolutions(storage) -> list[int]:
+    """Read supported DPI values."""
+    flags, values = _read_prop_attributes(storage, _WIA_IPS_XRES)
+    if flags & _WIA_PROP_RANGE and len(values) >= 3:
+        lo, hi, step = values[0], values[1], max(1, values[2])
+        if (hi - lo) // step <= 1000:
+            return list(range(lo, hi + 1, step))
+        return list(range(lo, hi + 1, (hi - lo) // 20))
+    if flags & _WIA_PROP_LIST and values:
+        # First element is the nominal/default; rest are valid values
+        return sorted(values[1:]) if len(values) > 1 else sorted(values)
+    # Fallback: return current value
+    val = _read_prop(storage, _WIA_IPS_XRES)
+    return [int(val)] if val is not None else []
+
+
+def _read_wia_color_modes(storage) -> list[ColorMode]:
+    """Read supported color modes."""
+    flags, values = _read_prop_attributes(storage, _WIA_IPA_DATATYPE)
+    if flags & _WIA_PROP_LIST and values:
+        items = values[1:] if len(values) > 1 else values
+        modes: list[ColorMode] = []
+        for v in items:
+            mapped = _WIA_DATATYPE_TO_COLOR.get(int(v))
+            if mapped is not None and mapped not in modes:
+                modes.append(mapped)
+        return modes
+    val = _read_prop(storage, _WIA_IPA_DATATYPE)
+    if val is not None:
+        mapped = _WIA_DATATYPE_TO_COLOR.get(int(val))
         return [mapped] if mapped else []
-    except Exception:
-        return []
+    return []
 
 
-def _read_wia_sources(device: object) -> list[ScanSource]:
+def _read_wia_sources(storage) -> list[ScanSource]:
     """Determine available scan sources from device capabilities."""
-    caps = _get_property_value(
-        device.Properties, _WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, 0
-    )
+    caps = _read_prop(storage, _WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, 0)
     sources: list[ScanSource] = []
     if caps & _FLAT:
         sources.append(ScanSource.FLATBED)
@@ -162,10 +547,10 @@ def _read_wia_sources(device: object) -> list[ScanSource]:
     return sources
 
 
-def _read_wia_max_page_size(device: object) -> PageSize | None:
-    """Read max page size (thousandths of inch → 1/10mm)."""
-    max_h = _get_property_value(device.Properties, _WIA_DPS_MAX_HORIZONTAL_SIZE)
-    max_v = _get_property_value(device.Properties, _WIA_DPS_MAX_VERTICAL_SIZE)
+def _read_wia_max_page_size(storage) -> PageSize | None:
+    """Read max page size (thousandths of inch -> 1/10mm)."""
+    max_h = _read_prop(storage, _WIA_DPS_MAX_HORIZONTAL_SIZE)
+    max_v = _read_prop(storage, _WIA_DPS_MAX_VERTICAL_SIZE)
     if max_h is not None and max_v is not None:
         width = math.ceil(int(max_h) * _MM10_PER_THOUSANDTH_INCH)
         height = math.ceil(int(max_v) * _MM10_PER_THOUSANDTH_INCH)
@@ -174,12 +559,12 @@ def _read_wia_max_page_size(device: object) -> PageSize | None:
 
 
 def _read_wia_defaults(
-    item: object, sources: list[ScanSource]
+    storage, sources: list[ScanSource]
 ) -> ScannerDefaults | None:
     """Read default settings from WIA item properties."""
     try:
-        dpi = int(_get_property_value(item.Properties, _WIA_IPS_XRES, 300))
-        dt = _get_property_value(item.Properties, _WIA_IPA_DATATYPE, _WIA_DATA_COLOR)
+        dpi = int(_read_prop(storage, _WIA_IPS_XRES, 300))
+        dt = _read_prop(storage, _WIA_IPA_DATATYPE, _WIA_DATA_COLOR)
         color_mode = _WIA_DATATYPE_TO_COLOR.get(int(dt), ColorMode.COLOR)
         source = sources[0] if sources else None
         return ScannerDefaults(dpi=dpi, color_mode=color_mode, source=source)
@@ -187,21 +572,93 @@ def _read_wia_defaults(
         return None
 
 
-# --- Backend ---
+# ---------------------------------------------------------------------------
+# Transfer callback
+# ---------------------------------------------------------------------------
+
+
+def _read_stream_data(stream_ptr: int) -> bytes:
+    """Read all data from a memory-backed IStream."""
+    hglobal = c_void_p()
+    _ole32.GetHGlobalFromStream(c_void_p(stream_ptr), byref(hglobal))
+    size = _kernel32.GlobalSize(hglobal)
+    if size == 0:
+        return b""
+    ptr = _kernel32.GlobalLock(hglobal)
+    try:
+        return ctypes.string_at(ptr, size)
+    finally:
+        _kernel32.GlobalUnlock(hglobal)
+
+
+class _TransferCallback(COMObject):
+    """IWiaTransferCallback implementation for streamed page transfers."""
+
+    _com_interfaces_ = [IWiaTransferCallback]
+
+    def __init__(self, progress_fn):
+        super().__init__()
+        self.pages: list[ScannedPage] = []
+        self._progress = progress_fn
+        self._current_stream: int | None = None
+        self._aborted = False
+
+    def IWiaTransferCallback_TransferCallback(self, this, lFlags, pWiaTransferParams):
+        params = pWiaTransferParams[0]
+        msg = params.lMessage
+
+        if msg == _WIA_TRANSFER_MSG_STATUS:
+            try:
+                check_progress(self._progress, params.lPercentComplete)
+            except ScanAborted:
+                self._aborted = True
+                return _WIA_ERROR_PAPER_EMPTY  # signal abort to WIA
+        elif msg == _WIA_TRANSFER_MSG_END_OF_STREAM:
+            if self._current_stream is not None:
+                bmp_data = _read_stream_data(self._current_stream)
+                if bmp_data:
+                    raw, w, h, ct, bd = _bmp_to_raw(bmp_data)
+                    self.pages.append(
+                        ScannedPage(
+                            data=raw, width=w, height=h,
+                            color_type=ct, bit_depth=bd,
+                        )
+                    )
+                self._current_stream = None
+        elif msg == _WIA_TRANSFER_MSG_DEVICE_STATUS:
+            hr = params.hrErrorStatus
+            if hr == _WIA_ERROR_PAPER_EMPTY:
+                pass  # feeder empty — handled after Download returns
+        return _S_OK
+
+    def IWiaTransferCallback_GetNextStream(self, this, lFlags, bstrItemName,
+                                           bstrFullItemName, ppDestination):
+        stream = c_void_p()
+        hr = _ole32.CreateStreamOnHGlobal(None, True, byref(stream))
+        if hr != _S_OK:
+            return hr
+        self._current_stream = stream.value
+        ppDestination[0] = stream.value
+        return _S_OK
+
+
+# ---------------------------------------------------------------------------
+# Backend
+# ---------------------------------------------------------------------------
 
 
 class WiaBackend:
-    """Windows scanning backend using WIA (via comtypes).
+    """Windows scanning backend using WIA 2.0 low-level COM interfaces.
 
-    Thread-safe: all operations execute on a dedicated worker thread
-    that owns the COM apartment.
+    Thread-safe: all operations execute on a dedicated STA worker thread
+    with a Win32 message pump for COM apartment marshaling.
     """
 
     def __init__(self) -> None:
-        self._handles: dict[str, object] = {}
+        self._handles: dict[str, tuple] = {}  # name -> (root_item, child_item)
         self._queue: queue.Queue = queue.Queue()
         self._ready = threading.Event()
-        self._work_event = None  # Win32 event handle, created in _run
+        self._work_event = None
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         self._ready.wait()
@@ -209,19 +666,14 @@ class WiaBackend:
     def _run(self) -> None:
         comtypes.CoInitialize()  # STA for apartment-threaded COM objects
         try:
-            import ctypes
-            import ctypes.wintypes as wt
-
             kernel32 = ctypes.windll.kernel32
             user32 = ctypes.windll.user32
         except (ImportError, AttributeError):
-            # Non-Windows (test environment with mocked comtypes)
             self._ready.set()
             self._run_simple()
             return
 
-        # Auto-reset event signaled when work items are enqueued
-        kernel32.CreateEventW.restype = ctypes.c_void_p
+        kernel32.CreateEventW.restype = c_void_p
         work_event = kernel32.CreateEventW(None, False, False, None)
         self._work_event = work_event
         self._ready.set()
@@ -230,17 +682,14 @@ class WiaBackend:
         msg = wt.MSG()
 
         while True:
-            # Wait for work signal or Win32 messages
             user32.MsgWaitForMultipleObjects(
-                1, handles, False, 0xFFFFFFFF, 0x04FF  # INFINITE, QS_ALLINPUT
+                1, handles, False, 0xFFFFFFFF, 0x04FF
             )
-            # Drain pending messages (required for COM STA marshaling)
             while user32.PeekMessageW(
-                ctypes.byref(msg), None, 0, 0, 0x0001  # PM_REMOVE
+                byref(msg), None, 0, 0, 0x0001
             ):
-                user32.TranslateMessage(ctypes.byref(msg))
-                user32.DispatchMessageW(ctypes.byref(msg))
-            # Process all queued work items
+                user32.TranslateMessage(byref(msg))
+                user32.DispatchMessageW(byref(msg))
             while True:
                 try:
                     func, args, event, box = self._queue.get_nowait()
@@ -263,11 +712,8 @@ class WiaBackend:
             event.set()
 
     def _signal_work(self) -> None:
-        """Signal the worker thread that work is available."""
         evt = self._work_event
         if evt is not None:
-            import ctypes
-
             ctypes.windll.kernel32.SetEvent(evt)
 
     def _dispatch(self, func, *args):
@@ -310,75 +756,103 @@ class WiaBackend:
 
     # --- Implementation (runs on worker thread) ---
 
-    def _create_device_manager(self) -> object:
-        return comtypes.client.CreateObject("WIA.DeviceManager")
+    def _create_device_manager(self) -> IWiaDevMgr2:
+        return comtypes.CoCreateInstance(
+            _CLSID_WiaDevMgr2,
+            interface=IWiaDevMgr2,
+            clsctx=comtypes.CLSCTX_LOCAL_SERVER,
+        )
 
     def _list_scanners_impl(self) -> list[Scanner]:
         dm = self._create_device_manager()
+        enum = dm.EnumDeviceInfo(_WIA_DEVINFO_ENUM_LOCAL)
+
         scanners: list[Scanner] = []
-        for i in range(1, dm.DeviceInfos.Count + 1):
-            di = dm.DeviceInfos.Item(i)
-            if di.Type != 1:  # 1 = scanner
+        count = enum.GetCount()
+
+        for _ in range(count):
+            try:
+                storage, fetched = enum.Next(1)
+            except Exception:
+                break
+            if not fetched:
+                break
+
+            dev_type = _read_prop(storage, _WIA_DIP_DEV_TYPE, 0)
+            # WIA device type is encoded: low word is STI type
+            if (int(dev_type) & 0xFFFF) != _StiDeviceTypeScanner:
                 continue
-            name = _get_property_value(di.Properties, _WIA_DIP_DEV_NAME, f"Scanner {i}")
-            vendor = _get_property_value(di.Properties, _WIA_DIP_VEND_DESC)
-            scanners.append(
-                Scanner(
-                    name=str(name),
-                    vendor=str(vendor) if vendor else None,
-                    model=None,
-                    backend="wia",
-                )
+
+            dev_id = _read_prop(storage, _WIA_DIP_DEV_ID, "")
+            name = _read_prop(storage, _WIA_DIP_DEV_NAME, "Unknown Scanner")
+            vendor = _read_prop(storage, _WIA_DIP_VEND_DESC)
+
+            scanner = Scanner(
+                name=str(name),
+                vendor=str(vendor) if vendor else None,
+                model=None,
+                backend="wia",
             )
+            scanner._device_id = str(dev_id)
+            scanners.append(scanner)
         return scanners
 
     def _open_scanner_impl(self, scanner: Scanner) -> None:
+        dev_id = getattr(scanner, "_device_id", None)
+        if not dev_id:
+            raise ScanError(f"Scanner {scanner.name!r} has no device ID")
+
         try:
             dm = self._create_device_manager()
-            device = None
-            for i in range(1, dm.DeviceInfos.Count + 1):
-                di = dm.DeviceInfos.Item(i)
-                if di.Type != 1:
-                    continue
-                di_name = _get_property_value(di.Properties, _WIA_DIP_DEV_NAME, "")
-                if str(di_name) == scanner.name:
-                    device = di.Connect()
-                    break
-            if device is None:
-                raise ScanError(f"Scanner {scanner.name!r} not found")
-        except ScanError:
-            raise
+            root_item = dm.CreateDevice(0, dev_id)
         except Exception as exc:
             raise ScanError(
                 f"Failed to open scanner {scanner.name!r}: {exc}"
             ) from exc
 
-        self._handles[scanner.name] = device
+        # Read device-level properties from root item
+        try:
+            root_storage = root_item.QueryInterface(IWiaPropertyStorage)
+        except Exception:
+            root_storage = None
 
-        # Query sources
-        sources = _read_wia_sources(device)
+        sources: list[ScanSource] = []
+        if root_storage is not None:
+            sources = _read_wia_sources(root_storage)
+            ps = _read_wia_max_page_size(root_storage)
+            if ps is not None:
+                for source in sources:
+                    scanner._max_page_sizes[source] = ps
+        if not sources:
+            sources = [ScanSource.FLATBED]
         scanner._sources = sources
 
-        # Query max page size
-        ps = _read_wia_max_page_size(device)
-        if ps is not None:
-            for source in sources:
-                scanner._max_page_sizes[source] = ps
-
-        # Query item-level properties from first scan item
+        # Get first child item for item-level properties
+        child_item = None
         try:
-            item = device.Items(1)
+            enum_items = root_item.EnumChildItems(None)
+            child, fetched = enum_items.Next(1)
+            if fetched:
+                child_item = child
         except Exception:
-            item = None
+            pass
 
-        if item is not None:
-            scanner._resolutions = _read_wia_resolutions(item)
-            scanner._color_modes = _read_wia_color_modes(item)
-            scanner._defaults = _read_wia_defaults(item, sources)
+        if child_item is not None:
+            try:
+                item_storage = child_item.QueryInterface(IWiaPropertyStorage)
+                scanner._resolutions = _read_wia_resolutions(item_storage)
+                scanner._color_modes = _read_wia_color_modes(item_storage)
+                scanner._defaults = _read_wia_defaults(item_storage, sources)
+            except Exception:
+                scanner._resolutions = []
+                scanner._color_modes = []
+                scanner._defaults = None
         else:
             scanner._resolutions = []
             scanner._color_modes = []
             scanner._defaults = None
+
+        self._handles[scanner.name] = (root_item, child_item)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
         self._handles.pop(scanner.name, None)
@@ -386,110 +860,98 @@ class WiaBackend:
     def _scan_pages_impl(
         self, scanner: Scanner, options: ScanOptions
     ) -> list[ScannedPage]:
-        device = self._handles.get(scanner.name)
-        if device is None:
+        items = self._handles.get(scanner.name)
+        if items is None:
             raise ScanError("Scanner is not open")
 
-        try:
-            # Select source
-            if options.source == ScanSource.FEEDER:
-                prop = _get_property(
-                    device.Properties, _WIA_DPS_DOCUMENT_HANDLING_SELECT
-                )
-                if prop is not None:
-                    prop.Value = _FEEDER
-            elif options.source == ScanSource.FLATBED:
-                prop = _get_property(
-                    device.Properties, _WIA_DPS_DOCUMENT_HANDLING_SELECT
-                )
-                if prop is not None:
-                    prop.Value = _FLATBED
+        root_item, child_item = items
+        if child_item is None:
+            raise ScanError("Scanner has no scan items")
 
-            item = device.Items(1)
+        try:
+            # Get property storage for the child item
+            item_storage = child_item.QueryInterface(IWiaPropertyStorage)
+
+            # Set source on root item
+            if options.source is not None:
+                try:
+                    root_storage = root_item.QueryInterface(IWiaPropertyStorage)
+                    if options.source == ScanSource.FEEDER:
+                        _write_prop(root_storage, _WIA_DPS_DOCUMENT_HANDLING_SELECT, _FEEDER)
+                    elif options.source == ScanSource.FLATBED:
+                        _write_prop(root_storage, _WIA_DPS_DOCUMENT_HANDLING_SELECT, _FLATBED)
+                except Exception:
+                    pass
 
             # Set resolution
-            xres_prop = _get_property(item.Properties, _WIA_IPS_XRES)
-            yres_prop = _get_property(item.Properties, _WIA_IPS_YRES)
-            if xres_prop is not None:
-                xres_prop.Value = options.dpi
-            if yres_prop is not None:
-                yres_prop.Value = options.dpi
+            _write_prop(item_storage, _WIA_IPS_XRES, options.dpi)
+            _write_prop(item_storage, _WIA_IPS_YRES, options.dpi)
 
             # Set color mode
-            dt_prop = _get_property(item.Properties, _WIA_IPA_DATATYPE)
-            if dt_prop is not None:
-                wia_dt = _COLOR_TO_WIA_DATATYPE.get(options.color_mode)
-                if wia_dt is not None:
-                    dt_prop.Value = wia_dt
+            wia_dt = _COLOR_TO_WIA_DATATYPE.get(options.color_mode)
+            if wia_dt is not None:
+                _write_prop(item_storage, _WIA_IPA_DATATYPE, wia_dt)
 
             # Set scan area
             if options.page_size is not None:
                 width_px = int(options.page_size.width / 10.0 / 25.4 * options.dpi)
                 height_px = int(options.page_size.height / 10.0 / 25.4 * options.dpi)
+                _write_prop(item_storage, _WIA_IPS_XPOS, 0)
+                _write_prop(item_storage, _WIA_IPS_YPOS, 0)
+                _write_prop(item_storage, _WIA_IPS_XEXTENT, width_px)
+                _write_prop(item_storage, _WIA_IPS_YEXTENT, height_px)
 
-                xpos = _get_property(item.Properties, _WIA_IPS_XPOS)
-                ypos = _get_property(item.Properties, _WIA_IPS_YPOS)
-                xext = _get_property(item.Properties, _WIA_IPS_XEXTENT)
-                yext = _get_property(item.Properties, _WIA_IPS_YEXTENT)
+            # Set format to BMP
+            _write_prop_guid(item_storage, _WIA_IPA_FORMAT, _WIA_FORMAT_BMP)
 
-                if xpos is not None:
-                    xpos.Value = 0
-                if ypos is not None:
-                    ypos.Value = 0
-                if xext is not None:
-                    xext.Value = width_px
-                if yext is not None:
-                    yext.Value = height_px
+            is_feeder = options.source == ScanSource.FEEDER
+
+            # For feeder: scan all pages
+            if is_feeder:
+                _write_prop(item_storage, _WIA_IPS_PAGES, 0)
 
             check_progress(options.progress, 0)
 
-            is_feeder = options.source == ScanSource.FEEDER
-            pages: list[ScannedPage] = []
-
-            # For feeder: scan all available pages
-            if is_feeder:
-                pages_prop = _get_property(item.Properties, _WIA_IPS_PAGES)
-                if pages_prop is not None:
-                    pages_prop.Value = 0
+            # Get IWiaTransfer and run download
+            transfer = child_item.QueryInterface(IWiaTransfer)
+            all_pages: list[ScannedPage] = []
 
             while True:
+                callback = _TransferCallback(options.progress)
                 try:
-                    image_file = item.Transfer(_WIA_FORMAT_BMP)
+                    transfer.Download(0, callback)
                 except Exception as exc:
                     hr = getattr(exc, "hresult", None)
-                    msg = str(exc).lower()
-                    if hr == _WIA_ERROR_PAPER_EMPTY or "paper" in msg or "empty" in msg:
-                        if is_feeder and not pages:
+                    msg_text = str(exc).lower()
+                    if callback._aborted:
+                        raise ScanAborted("Scan aborted") from exc
+                    if hr == _WIA_ERROR_PAPER_EMPTY or "paper" in msg_text or "empty" in msg_text:
+                        if is_feeder and not all_pages and not callback.pages:
                             raise FeederEmptyError(
                                 "No documents in feeder"
                             ) from exc
-                        break
-                    if "cancel" in msg or "abort" in msg:
+                        # Feeder empty after some pages — that's normal
+                    elif "cancel" in msg_text or "abort" in msg_text:
                         raise ScanAborted(
                             f"Scan cancelled by device: {exc}"
                         ) from exc
-                    if is_feeder and pages:
-                        break
-                    raise ScanError(f"Scan failed: {exc}") from exc
+                    elif not callback.pages and not all_pages:
+                        raise ScanError(f"Scan failed: {exc}") from exc
 
-                bmp_data = bytes(image_file.FileData.BinaryData)
-                raw, w, h, ct, bd = _bmp_to_raw(bmp_data)
-                pages.append(
-                    ScannedPage(data=raw, width=w, height=h, color_type=ct, bit_depth=bd)
-                )
+                all_pages.extend(callback.pages)
 
                 if is_feeder:
-                    continue
+                    break  # Download handles all feeder pages
                 else:
-                    if options.next_page is not None and options.next_page(len(pages)):
+                    if options.next_page is not None and options.next_page(len(all_pages)):
                         continue
                     break
 
-            if not pages:
+            if not all_pages:
                 raise ScanError("No pages were scanned")
 
             check_progress(options.progress, 100)
-            return pages
+            return all_pages
 
         except (ScanAborted, ScanError, FeederEmptyError):
             raise

@@ -1,127 +1,14 @@
 /*
  * _scanlib_accel — CPython C++ extension for scanlib hot paths.
  *
- * JPEG encoding is delegated to toojpeg (zlib license).
- * Pixel conversion utilities (rgb_to_gray, gray_to_bw, trim_rows)
- * are simple C reimplementations of the former pure-Python code.
+ * Pixel conversion utilities (rgb_to_gray, rgb_to_bgr, gray_to_bw,
+ * trim_rows, strip_alpha) and BMP parsing (bmp_to_raw).
  */
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-#include <cstdlib>
 #include <cstring>
-
-#include "toojpeg.h"
-
-/* ------------------------------------------------------------------ */
-/* Growable byte buffer                                                */
-/* ------------------------------------------------------------------ */
-
-struct ByteBuf {
-    unsigned char *data;
-    size_t len;
-    size_t cap;
-};
-
-static void bytebuf_init(ByteBuf *b) {
-    b->data = nullptr;
-    b->len = 0;
-    b->cap = 0;
-}
-
-static void bytebuf_append(ByteBuf *b, unsigned char byte) {
-    if (b->len >= b->cap) {
-        size_t new_cap = (b->cap == 0) ? 4096 : b->cap * 2;
-        auto *tmp = static_cast<unsigned char *>(std::realloc(b->data, new_cap));
-        if (!tmp) return;
-        b->data = tmp;
-        b->cap = new_cap;
-    }
-    b->data[b->len++] = byte;
-}
-
-static void bytebuf_free(ByteBuf *b) {
-    std::free(b->data);
-    b->data = nullptr;
-    b->len = b->cap = 0;
-}
-
-/* Thread-local buffer pointer for toojpeg callback (no context param) */
-static thread_local ByteBuf *tl_buf = nullptr;
-
-static void toojpeg_write_cb(unsigned char byte) {
-    bytebuf_append(tl_buf, byte);
-}
-
-/* ------------------------------------------------------------------ */
-/* encode_jpeg                                                        */
-/* ------------------------------------------------------------------ */
-
-static PyObject *py_encode_jpeg(PyObject * /*self*/, PyObject *args) {
-    Py_buffer pixels;
-    int width, height, color_type, quality;
-
-    if (!PyArg_ParseTuple(args, "y*iiii", &pixels, &width, &height,
-                          &color_type, &quality))
-        return nullptr;
-
-    bool isRGB;
-    int comp;
-    if (color_type == 0) {
-        isRGB = false;
-        comp = 1;
-    } else if (color_type == 2) {
-        isRGB = true;
-        comp = 3;
-    } else {
-        PyBuffer_Release(&pixels);
-        PyErr_SetString(PyExc_ValueError, "color_type must be 0 or 2");
-        return nullptr;
-    }
-
-    Py_ssize_t expected = static_cast<Py_ssize_t>(width) * height * comp;
-    if (pixels.len < expected) {
-        PyBuffer_Release(&pixels);
-        PyErr_Format(PyExc_ValueError,
-                     "pixel buffer too small: need %zd, got %zd",
-                     expected, pixels.len);
-        return nullptr;
-    }
-
-    if (quality < 1) quality = 1;
-    if (quality > 100) quality = 100;
-
-    ByteBuf buf;
-    bytebuf_init(&buf);
-    tl_buf = &buf;
-    const auto *pdata = static_cast<const unsigned char *>(pixels.buf);
-
-    bool ok;
-    Py_BEGIN_ALLOW_THREADS
-    ok = TooJpeg::writeJpeg(toojpeg_write_cb, pdata,
-                            static_cast<unsigned short>(width),
-                            static_cast<unsigned short>(height),
-                            isRGB,
-                            static_cast<unsigned char>(quality),
-                            isRGB /* downsample 4:2:0 for RGB only */);
-    Py_END_ALLOW_THREADS
-
-    tl_buf = nullptr;
-    PyBuffer_Release(&pixels);
-
-    if (!ok) {
-        bytebuf_free(&buf);
-        PyErr_SetString(PyExc_RuntimeError, "JPEG encoding failed");
-        return nullptr;
-    }
-
-    PyObject *result = PyBytes_FromStringAndSize(
-        reinterpret_cast<const char *>(buf.data),
-        static_cast<Py_ssize_t>(buf.len));
-    bytebuf_free(&buf);
-    return result;
-}
 
 /* ------------------------------------------------------------------ */
 /* rgb_to_gray                                                        */
@@ -156,6 +43,46 @@ static PyObject *py_rgb_to_gray(PyObject * /*self*/, PyObject *args) {
         dst[i] = static_cast<unsigned char>(
             (76 * src[off] + 150 * src[off + 1] + 29 * src[off + 2]) >> 8
         );
+    }
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&data);
+    return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* rgb_to_bgr                                                         */
+/* ------------------------------------------------------------------ */
+
+static PyObject *py_rgb_to_bgr(PyObject * /*self*/, PyObject *args) {
+    Py_buffer data;
+    int width, height;
+
+    if (!PyArg_ParseTuple(args, "y*ii", &data, &width, &height))
+        return nullptr;
+
+    Py_ssize_t count = static_cast<Py_ssize_t>(width) * height;
+    if (data.len < count * 3) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
+        return nullptr;
+    }
+
+    PyObject *result = PyBytes_FromStringAndSize(nullptr, count * 3);
+    if (!result) {
+        PyBuffer_Release(&data);
+        return nullptr;
+    }
+
+    const auto *src = static_cast<const unsigned char *>(data.buf);
+    auto *dst = reinterpret_cast<unsigned char *>(PyBytes_AS_STRING(result));
+
+    Py_BEGIN_ALLOW_THREADS
+    for (Py_ssize_t i = 0; i < count; i++) {
+        Py_ssize_t off = i * 3;
+        dst[off]     = src[off + 2];  /* B <- R */
+        dst[off + 1] = src[off + 1];  /* G <- G */
+        dst[off + 2] = src[off];      /* R <- B */
     }
     Py_END_ALLOW_THREADS
 
@@ -490,12 +417,12 @@ static PyObject *py_bmp_to_raw(PyObject * /*self*/, PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyMethodDef methods[] = {
-    {"encode_jpeg", py_encode_jpeg, METH_VARARGS,
-     "encode_jpeg(pixels, width, height, color_type, quality) -> bytes\n"
-     "Encode raw pixels as baseline JPEG."},
     {"rgb_to_gray", py_rgb_to_gray, METH_VARARGS,
      "rgb_to_gray(data, width, height) -> bytes\n"
      "Convert 8-bit interleaved RGB to 8-bit grayscale."},
+    {"rgb_to_bgr", py_rgb_to_bgr, METH_VARARGS,
+     "rgb_to_bgr(data, width, height) -> bytes\n"
+     "Convert 8-bit interleaved RGB to BGR (swap R and B channels)."},
     {"gray_to_bw", py_gray_to_bw, METH_VARARGS,
      "gray_to_bw(data, width, height) -> bytes\n"
      "Convert 8-bit grayscale to 1-bit packed (MSB first)."},
@@ -522,7 +449,7 @@ static PyModuleDef_Slot module_slots[] = {
 static struct PyModuleDef module = {
     PyModuleDef_HEAD_INIT,
     "_scanlib_accel",
-    "Accelerated helpers for scanlib (JPEG encoding, pixel conversion).",
+    "Accelerated helpers for scanlib (pixel conversion, BMP parsing).",
     0,
     methods,
     module_slots,

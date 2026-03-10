@@ -1,6 +1,8 @@
-"""Tests for the JPEG encoder (turbo / toojpeg fallback)."""
+"""Tests for the JPEG encoder (platform-native: ImageIO / WIC / libjpeg-turbo)."""
 
 from __future__ import annotations
+
+import sys
 
 import pytest
 
@@ -80,6 +82,11 @@ class TestJpegBasic:
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
+    def test_encode_jpeg_callable(self):
+        """Verify encode_jpeg is available on the current platform."""
+        data = encode_jpeg(_solid_gray(8, 8), 8, 8, 0, 85)
+        assert data[:2] == b"\xff\xd8"
+
 
 class TestJpegQuality:
     def test_quality_affects_size(self):
@@ -131,17 +138,3 @@ class TestJpegSof:
         assert w == 48
         assert h == 32
         assert ncomp == 3
-
-
-class TestJpegFallback:
-    """Test that toojpeg fallback works when turbo is unavailable."""
-
-    def test_toojpeg_fallback(self):
-        from _scanlib_accel import encode_jpeg as toojpeg_encode
-        data = toojpeg_encode(_solid_rgb(16, 16), 16, 16, 2, 85)
-        assert data[:2] == b"\xff\xd8"
-        assert data[-2:] == b"\xff\xd9"
-
-    def test_has_turbo_attribute(self):
-        from scanlib._jpeg import has_turbo
-        assert isinstance(has_turbo, bool)

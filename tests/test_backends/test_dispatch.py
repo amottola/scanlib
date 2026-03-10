@@ -11,18 +11,6 @@ import pytest
 class TestWiaDispatch:
     """Test WiaBackend._dispatch runs functions on the worker thread."""
 
-    @pytest.fixture(autouse=True)
-    def mock_comtypes(self):
-        from unittest import mock
-
-        mock_ct = mock.MagicMock()
-        mock_ct_client = mock.MagicMock()
-        with mock.patch.dict("sys.modules", {
-            "comtypes": mock_ct,
-            "comtypes.client": mock_ct_client,
-        }):
-            yield
-
     def _make_backend(self):
         from scanlib.backends._wia import WiaBackend
 

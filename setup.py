@@ -9,6 +9,6 @@ else:
 
 setup(ext_modules=[Extension(
     "_scanlib_accel",
-    sources=["src/accel/_scanlib_accel.cpp", "src/accel/toojpeg.cpp"],
+    sources=["src/accel/_scanlib_accel.cpp"],
     extra_compile_args=extra_compile_args,
 )])
