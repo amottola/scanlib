@@ -425,6 +425,23 @@ class TestScanPages:
         with pytest.raises(ScannerNotOpenError):
             s.scan_pages()
 
+    def _open_scanner(self, **caps):
+        """Create a mock-opened Scanner with given capabilities."""
+        def open_scanner(be, s):
+            s._resolutions = caps.get("resolutions", [100, 200, 300])
+            s._color_modes = caps.get("color_modes", [ColorMode.COLOR, ColorMode.GRAY])
+            s._sources = caps.get("sources", [ScanSource.FLATBED])
+
+        mock_backend = type("B", (), {
+            "open_scanner": open_scanner,
+            "close_scanner": lambda self, s: None,
+            "scan_pages": lambda self, s, o: iter([_make_page()]),
+        })()
+        s = Scanner(name="test", vendor=None, model=None, backend="sane",
+                    _backend_impl=mock_backend)
+        s.open()
+        return s
+
     def test_scan_pages_yields_pages(self):
         pages = [_make_page(), _make_page()]
 
@@ -442,6 +459,21 @@ class TestScanPages:
             result = list(s.scan_pages())
         assert len(result) == 2
         assert all(isinstance(p, ScannedPage) for p in result)
+
+    def test_scan_rejects_unsupported_dpi(self):
+        s = self._open_scanner(resolutions=[100, 200, 300])
+        with pytest.raises(ValueError, match="Unsupported DPI"):
+            s.scan_pages(dpi=150)
+
+    def test_scan_rejects_unsupported_color_mode(self):
+        s = self._open_scanner(color_modes=[ColorMode.COLOR])
+        with pytest.raises(ValueError, match="Unsupported color mode"):
+            s.scan_pages(color_mode=ColorMode.BW)
+
+    def test_scan_rejects_unsupported_source(self):
+        s = self._open_scanner(sources=[ScanSource.FLATBED])
+        with pytest.raises(ValueError, match="Unsupported source"):
+            s.scan_pages(source=ScanSource.FEEDER)
 
 
 class TestBuildPdf:

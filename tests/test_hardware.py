@@ -101,8 +101,15 @@ class TestScanHardware:
     @pytest.mark.timeout(120)
     def test_scan_custom_dpi(self):
         with _scanners[0] as scanner:
-            doc = scanner.scan(dpi=150)
-            assert doc.dpi == 150
+            dpi = scanner.resolutions[0]
+            doc = scanner.scan(dpi=dpi)
+            assert doc.dpi == dpi
+
+    @pytest.mark.timeout(10)
+    def test_scan_unsupported_dpi(self):
+        with _scanners[0] as scanner:
+            with pytest.raises(ValueError, match="Unsupported DPI"):
+                scanner.scan(dpi=999)
 
     @pytest.mark.timeout(120)
     def test_scan_with_page_size(self):

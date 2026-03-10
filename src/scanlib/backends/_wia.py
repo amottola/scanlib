@@ -159,8 +159,12 @@ _MM10_PER_THOUSANDTH_INCH = 0.254
 # ---------------------------------------------------------------------------
 
 
+class _PROPSPEC_UNION(Union):
+    _fields_ = [("propid", c_ulong), ("lpwstr", c_void_p)]
+
+
 class _PROPSPEC(Structure):
-    _fields_ = [("ulKind", c_ulong), ("propid", c_ulong)]
+    _fields_ = [("ulKind", c_ulong), ("u", _PROPSPEC_UNION)]
 
 
 class _CAL(Structure):
@@ -441,7 +445,7 @@ if _HAS_WIN32:
 def _make_propspec(prop_id: int) -> _PROPSPEC:
     ps = _PROPSPEC()
     ps.ulKind = _PRSPEC_PROPID
-    ps.propid = prop_id
+    ps.u.propid = prop_id
     return ps
 
 
@@ -528,9 +532,9 @@ def _read_wia_resolutions(storage) -> list[int]:
         if (hi - lo) // step <= 1000:
             return list(range(lo, hi + 1, step))
         return list(range(lo, hi + 1, (hi - lo) // 20))
-    if flags & _WIA_PROP_LIST and values:
-        # First element is the nominal/default; rest are valid values
-        return sorted(values[1:]) if len(values) > 1 else sorted(values)
+    if flags & _WIA_PROP_LIST and len(values) > 2:
+        # WIA list format: [count, nominal, value1, value2, ...]
+        return sorted(values[2:])
     # Fallback: return current value
     val = _read_prop(storage, _WIA_IPS_XRES)
     return [int(val)] if val is not None else []
@@ -539,10 +543,10 @@ def _read_wia_resolutions(storage) -> list[int]:
 def _read_wia_color_modes(storage) -> list[ColorMode]:
     """Read supported color modes."""
     flags, values = _read_prop_attributes(storage, _WIA_IPA_DATATYPE)
-    if flags & _WIA_PROP_LIST and values:
-        items = values[1:] if len(values) > 1 else values
+    if flags & _WIA_PROP_LIST and len(values) > 2:
+        # WIA list format: [count, nominal, value1, value2, ...]
         modes: list[ColorMode] = []
-        for v in items:
+        for v in values[2:]:
             mapped = _WIA_DATATYPE_TO_COLOR.get(int(v))
             if mapped is not None and mapped not in modes:
                 modes.append(mapped)
@@ -597,18 +601,37 @@ def _read_wia_defaults(
 # ---------------------------------------------------------------------------
 
 
+_ADDREF_TYPE = ctypes.CFUNCTYPE(c_ulong, c_void_p)
+
+
+def _com_addref(ptr: int) -> None:
+    """Call IUnknown::AddRef on a raw COM pointer."""
+    vtbl = ctypes.cast(ptr, POINTER(c_void_p))[0]
+    fn = _ADDREF_TYPE(ctypes.cast(vtbl, POINTER(c_void_p))[1])
+    fn(ptr)
+
+
+def _com_release(ptr: int) -> None:
+    """Call IUnknown::Release on a raw COM pointer."""
+    vtbl = ctypes.cast(ptr, POINTER(c_void_p))[0]
+    fn = _ADDREF_TYPE(ctypes.cast(vtbl, POINTER(c_void_p))[2])
+    fn(ptr)
+
+
 def _read_stream_data(stream_ptr: int) -> bytes:
-    """Read all data from a memory-backed IStream."""
+    """Read all data from a memory-backed IStream and release it."""
     hglobal = c_void_p()
     _ole32.GetHGlobalFromStream(c_void_p(stream_ptr), byref(hglobal))
     size = _kernel32.GlobalSize(hglobal)
     if size == 0:
+        _com_release(stream_ptr)
         return b""
     ptr = _kernel32.GlobalLock(hglobal)
     try:
         return ctypes.string_at(ptr, size)
     finally:
         _kernel32.GlobalUnlock(hglobal)
+        _com_release(stream_ptr)
 
 
 class _TransferCallback(COMObject):
@@ -659,7 +682,10 @@ class _TransferCallback(COMObject):
         if hr != _S_OK:
             return hr
         self._current_stream = stream.value
-        ppDestination[0] = stream.value
+        # AddRef so the stream survives WIA's Release; our _read_stream_data
+        # will call Release when it's done reading.
+        _com_addref(stream.value)
+        ctypes.cast(ppDestination, POINTER(c_void_p))[0] = stream.value
         return _S_OK
 
 

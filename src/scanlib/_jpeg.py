@@ -161,8 +161,10 @@ elif sys.platform == "win32":
     # Windows WIC encoder (raw ctypes COM vtable calls)                   #
     # ------------------------------------------------------------------ #
 
-    from ctypes import byref, c_float, c_void_p, windll
-    from ctypes.wintypes import BOOL, DWORD, HRESULT, LPCOLESTR, ULONG, ULARGE_INTEGER
+    from ctypes import HRESULT, byref, c_float, c_void_p, c_wchar_p, windll
+    from ctypes.wintypes import BOOL, DWORD, ULONG
+
+    LPCOLESTR = c_wchar_p
 
     _ole32 = windll.ole32
     _kernel32 = windll.kernel32

@@ -376,6 +376,20 @@ class Scanner:
         """
         if not self._is_open:
             raise ScannerNotOpenError("Scanner must be opened before scanning")
+        if self._resolutions and dpi not in self._resolutions:
+            raise ValueError(
+                f"Unsupported DPI {dpi}; scanner supports {self._resolutions}"
+            )
+        if self._color_modes and color_mode not in self._color_modes:
+            raise ValueError(
+                f"Unsupported color mode {color_mode.value!r}; "
+                f"scanner supports {[m.value for m in self._color_modes]}"
+            )
+        if source is not None and self._sources and source not in self._sources:
+            raise ValueError(
+                f"Unsupported source {source.value!r}; "
+                f"scanner supports {[s.value for s in self._sources]}"
+            )
         options = ScanOptions(
             dpi=dpi,
             color_mode=color_mode,
