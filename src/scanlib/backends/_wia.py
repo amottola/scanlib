@@ -411,7 +411,15 @@ IWiaDevMgr2._methods_ = [
 
 if _HAS_WIN32:
     _ole32 = ctypes.windll.ole32
+    _oleaut32 = ctypes.windll.oleaut32
     _kernel32 = ctypes.windll.kernel32
+
+    _ole32.CoTaskMemFree.argtypes = [c_void_p]
+    _ole32.CoTaskMemFree.restype = None
+    _ole32.PropVariantClear.argtypes = [ctypes.POINTER(_PROPVARIANT)]
+    _ole32.PropVariantClear.restype = HRESULT
+    _oleaut32.SysFreeString.argtypes = [c_void_p]
+    _oleaut32.SysFreeString.restype = None
 
     _ole32.CreateStreamOnHGlobal.restype = HRESULT
     _ole32.GetHGlobalFromStream.restype = HRESULT
@@ -442,7 +450,9 @@ def _read_prop(storage, prop_id: int, default: object = None) -> object:
     if vt in (_VT_UI4, _VT_UI2):
         return var._value.ulVal
     if vt == _VT_BSTR and var._value.bstrVal:
-        return ctypes.wstring_at(var._value.bstrVal)
+        result = ctypes.wstring_at(var._value.bstrVal)
+        _oleaut32.SysFreeString(var._value.bstrVal)
+        return result
     if vt == _VT_EMPTY:
         return default
     return default
@@ -492,6 +502,8 @@ def _read_prop_attributes(
     elif vt == (_VT_VECTOR | _VT_UI4) and var._value.caul.cElems > 0:
         n = var._value.caul.cElems
         result = [var._value.caul.pElems[i] for i in range(n)]
+    # Free the PROPVARIANT's allocated memory (vector arrays, etc.)
+    _ole32.PropVariantClear(byref(var))
     return (flags_int, result)
 
 

@@ -445,16 +445,33 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
     PyBuffer_Release(&data);
 
     /* Return (raw_bytes, width, height, color_type, bit_depth) */
+    PyObject *py_w = PyLong_FromLong(width);
+    PyObject *py_h = PyLong_FromLong(height);
+    PyObject *py_ct = PyLong_FromLong(color_type);
+    PyObject *py_bd = PyLong_FromLong(bit_depth);
+    if (!py_w || !py_h || !py_ct || !py_bd) {
+        Py_DECREF(result);
+        Py_XDECREF(py_w);
+        Py_XDECREF(py_h);
+        Py_XDECREF(py_ct);
+        Py_XDECREF(py_bd);
+        return NULL;
+    }
+
     PyObject *tuple = PyTuple_New(5);
     if (!tuple) {
         Py_DECREF(result);
+        Py_DECREF(py_w);
+        Py_DECREF(py_h);
+        Py_DECREF(py_ct);
+        Py_DECREF(py_bd);
         return NULL;
     }
     PyTuple_SET_ITEM(tuple, 0, result);
-    PyTuple_SET_ITEM(tuple, 1, PyLong_FromLong(width));
-    PyTuple_SET_ITEM(tuple, 2, PyLong_FromLong(height));
-    PyTuple_SET_ITEM(tuple, 3, PyLong_FromLong(color_type));
-    PyTuple_SET_ITEM(tuple, 4, PyLong_FromLong(bit_depth));
+    PyTuple_SET_ITEM(tuple, 1, py_w);
+    PyTuple_SET_ITEM(tuple, 2, py_h);
+    PyTuple_SET_ITEM(tuple, 3, py_ct);
+    PyTuple_SET_ITEM(tuple, 4, py_bd);
     return tuple;
 }
 
@@ -523,24 +540,17 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
         unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
         memset(dst, 0, (size_t)out_len);
 
-        Py_BEGIN_ALLOW_THREADS
-        if (degrees == 180) {
-            for (int y = 0; y < height; y++) {
-                int dy = height - 1 - y;
-                for (int x = 0; x < width; x++) {
-                    int dx = width - 1 - x;
-                    int src_bit = (src[y * src_row_bytes + x / 8]
-                                   >> (7 - (x & 7))) & 1;
-                    if (src_bit)
-                        dst[dy * dst_row_bytes + dx / 8] |=
-                            (unsigned char)(0x80 >> (dx & 7));
-                }
-            }
-        } else {
-            /* 90/270: unpack, rotate, repack */
+        if (degrees != 180) {
+            /* 90/270: need a temp buffer — allocate before releasing GIL */
             Py_ssize_t npix = (Py_ssize_t)width * height;
             unsigned char *tmp = (unsigned char *)malloc((size_t)npix);
+            if (!tmp) {
+                Py_DECREF(result);
+                PyBuffer_Release(&data);
+                return PyErr_NoMemory();
+            }
 
+            Py_BEGIN_ALLOW_THREADS
             /* Unpack bits to bytes (1 = white, 0 = black) */
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
@@ -567,8 +577,22 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
                 }
             }
             free(tmp);
+            Py_END_ALLOW_THREADS
+        } else {
+            Py_BEGIN_ALLOW_THREADS
+            for (int y = 0; y < height; y++) {
+                int dy = height - 1 - y;
+                for (int x = 0; x < width; x++) {
+                    int dx = width - 1 - x;
+                    int src_bit = (src[y * src_row_bytes + x / 8]
+                                   >> (7 - (x & 7))) & 1;
+                    if (src_bit)
+                        dst[dy * dst_row_bytes + dx / 8] |=
+                            (unsigned char)(0x80 >> (dx & 7));
+                }
+            }
+            Py_END_ALLOW_THREADS
         }
-        Py_END_ALLOW_THREADS
     } else {
         /* ---- 8-bit grayscale or RGB rotation ---- */
         Py_ssize_t out_len = (Py_ssize_t)new_w * new_h * bpp;
