@@ -12,6 +12,8 @@ platform-native encoders (ImageIO on macOS, WIC on Windows,
 uses stdlib ``zlib``, pixel conversion is handled by a bundled C
 extension, and PDF assembly uses only the standard library.
 
+The project is hosted on `GitHub <https://github.com/amottola/scanlib>`_.
+
 Requirements & Installation
 ---------------------------
 
@@ -25,16 +27,25 @@ build the bundled accelerator extension.
 
 Platform backends and their Python bindings are installed automatically by pip:
 
-- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes.
-  Requires ``libsane`` (``apt install libsane-dev`` / ``dnf install sane-backends``).
-- **macOS 10.7+** — ImageCaptureCore via pyobjc.
+- **macOS 10.7+** — ImageCaptureCore via pyobjc. JPEG encoding uses the
+  built-in ImageIO framework. No additional system packages required.
 - **Windows 10+** — WIA 2.0 via `comtypes <https://github.com/enthought/comtypes>`_.
-- **Linux** also requires `libjpeg-turbo <https://libjpeg-turbo.org/>`_
-  for JPEG encoding (``apt install libturbojpeg0-dev``).
+  JPEG encoding uses the built-in WIC (Windows Imaging Component).
+  No additional system packages required.
+- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes, with
+  `libjpeg-turbo <https://libjpeg-turbo.org/>`_ for JPEG encoding. Both
+  must be installed:
 
-Page encoding supports JPEG (platform-native: ImageIO on macOS, WIC on
-Windows, libjpeg-turbo on Linux) and lossless PNG (stdlib ``zlib``, no
-external dependency).
+  .. code-block:: bash
+
+     # Debian / Ubuntu
+     apt install libsane-dev libturbojpeg0-dev
+
+     # Fedora / RHEL
+     dnf install sane-backends turbojpeg-devel
+
+Page encoding supports JPEG and lossless PNG (this last one uses stdlib ``zlib``,
+no external dependency).
 
 .. toctree::
    :maxdepth: 2
