@@ -231,15 +231,30 @@ class TestScannerNotOpenError:
 
 def _make_page(width=16, height=16, color_type=2, bit_depth=8):
     """Create a ScannedPage with deterministic pixel data."""
-    if color_type == 2:
+    if bit_depth == 1:
+        # 1-bit packed data (MSB first)
+        row_bytes = (width + 7) // 8
+        buf = bytearray(row_bytes * height)
+        for y in range(height):
+            for x in range(width):
+                # Checkerboard pattern
+                if (x + y) % 2 == 0:
+                    buf[y * row_bytes + x // 8] |= 0x80 >> (x & 7)
+        data = bytes(buf)
+    elif color_type == 2:
         channels = 3
+        data = bytes(
+            [(y * 37 + x * 13) & 0xFF
+             for y in range(height)
+             for x in range(width * channels)]
+        )
     else:
         channels = 1
-    data = bytes(
-        [(y * 37 + x * 13) & 0xFF
-         for y in range(height)
-         for x in range(width * channels)]
-    )
+        data = bytes(
+            [(y * 37 + x * 13) & 0xFF
+             for y in range(height)
+             for x in range(width * channels)]
+        )
     return ScannedPage(
         data=data, width=width, height=height,
         color_type=color_type, bit_depth=bit_depth,
@@ -454,3 +469,79 @@ class TestBuildPdf:
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="No pages"):
             build_pdf([])
+
+    def test_bw_page_jpeg_format(self):
+        """BW page encoded as JPEG in PDF (must unpack to 8-bit)."""
+        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        doc = build_pdf([page], color_mode=ColorMode.BW,
+                        image_format=ImageFormat.JPEG)
+        assert doc.data[:8] == b"%PDF-1.4"
+        assert b"/DCTDecode" in doc.data
+
+    def test_bw_page_png_format(self):
+        """BW page encoded as PNG in PDF (stays 1-bit)."""
+        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        doc = build_pdf([page], color_mode=ColorMode.BW,
+                        image_format=ImageFormat.PNG)
+        assert doc.data[:8] == b"%PDF-1.4"
+        assert b"/FlateDecode" in doc.data
+        assert b"/BitsPerComponent 1" in doc.data
+
+    def test_bw_page_as_gray(self):
+        """BW page converted to grayscale in PDF (must unpack to 8-bit)."""
+        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        doc = build_pdf([page], color_mode=ColorMode.GRAY)
+        assert doc.data[:8] == b"%PDF-1.4"
+        assert b"/BitsPerComponent 8" in doc.data
+
+
+class TestBwToGray:
+    def test_roundtrip(self):
+        """gray_to_bw then bw_to_gray preserves values (0 or 255)."""
+        from _scanlib_accel import bw_to_gray, gray_to_bw
+
+        width, height = 10, 5
+        # Start with gray pixels: alternating 0 and 255
+        gray = bytes([255 if (x + y) % 2 == 0 else 0
+                      for y in range(height)
+                      for x in range(width)])
+        packed = gray_to_bw(gray, width, height)
+        unpacked = bw_to_gray(packed, width, height)
+        assert unpacked == gray
+
+    def test_output_size(self):
+        from _scanlib_accel import bw_to_gray
+
+        width, height = 13, 7  # non-multiple-of-8 width
+        row_bytes = (width + 7) // 8
+        packed = bytes(row_bytes * height)
+        gray = bw_to_gray(packed, width, height)
+        assert len(gray) == width * height
+
+    def test_bit_values(self):
+        """Each set bit becomes 255, each unset bit becomes 0."""
+        from _scanlib_accel import bw_to_gray
+
+        # 1 byte = 8 pixels: bits 10110001
+        packed = bytes([0b10110001])
+        gray = bw_to_gray(packed, 8, 1)
+        assert gray == bytes([255, 0, 255, 255, 0, 0, 0, 255])
+
+    def test_to_jpeg_bw_page(self):
+        """to_jpeg() works on 1-bit BW pages."""
+        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        jpg = page.to_jpeg()
+        assert jpg[:2] == b"\xff\xd8"
+        assert jpg[-2:] == b"\xff\xd9"
+
+    def test_to_png_bw_page(self):
+        """to_png() works on 1-bit BW pages."""
+        import struct
+        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        png = page.to_png()
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        # Parse IHDR to verify bit_depth=1
+        ihdr_len = struct.unpack(">I", png[8:12])[0]
+        w, h, bd, ct = struct.unpack(">IIBBBBB", png[16:16 + ihdr_len])[:4]
+        assert bd == 1
+        assert ct == 0

@@ -145,6 +145,50 @@ static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
 }
 
 /* ------------------------------------------------------------------ */
+/* bw_to_gray                                                         */
+/* ------------------------------------------------------------------ */
+
+static PyObject *py_bw_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
+    Py_buffer data;
+    int width, height;
+
+    if (!PyArg_ParseTuple(args, "y*ii", &data, &width, &height))
+        return NULL;
+
+    int row_bytes = (width + 7) / 8;
+    Py_ssize_t expected = (Py_ssize_t)row_bytes * height;
+    if (data.len < expected) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
+        return NULL;
+    }
+
+    Py_ssize_t out_len = (Py_ssize_t)width * height;
+    PyObject *result = PyBytes_FromStringAndSize(NULL, out_len);
+    if (!result) {
+        PyBuffer_Release(&data);
+        return NULL;
+    }
+
+    const unsigned char *src = (const unsigned char *)data.buf;
+    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+
+    Py_BEGIN_ALLOW_THREADS
+    for (int y = 0; y < height; y++) {
+        int src_off = y * row_bytes;
+        int dst_off = y * width;
+        for (int x = 0; x < width; x++) {
+            int bit = (src[src_off + x / 8] >> (7 - (x & 7))) & 1;
+            dst[dst_off + x] = bit ? 255 : 0;
+        }
+    }
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&data);
+    return result;
+}
+
+/* ------------------------------------------------------------------ */
 /* trim_rows                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -594,6 +638,9 @@ static PyMethodDef methods[] = {
     {"gray_to_bw", py_gray_to_bw, METH_VARARGS,
      "gray_to_bw(data, width, height) -> bytes\n"
      "Convert 8-bit grayscale to 1-bit packed (MSB first)."},
+    {"bw_to_gray", py_bw_to_gray, METH_VARARGS,
+     "bw_to_gray(data, width, height) -> bytes\n"
+     "Convert 1-bit packed (MSB first) to 8-bit grayscale."},
     {"trim_rows", py_trim_rows, METH_VARARGS,
      "trim_rows(data, height, stride, row_width) -> bytes\n"
      "Remove row padding from raw scan data."},

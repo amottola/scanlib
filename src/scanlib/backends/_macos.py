@@ -187,7 +187,10 @@ def _assemble_image(
     """
     from _scanlib_accel import strip_alpha, trim_rows
 
-    pixel_row_bytes = width * nc * max(bpc // 8, 1)
+    if bpc == 1:
+        pixel_row_bytes = (width + 7) // 8
+    else:
+        pixel_row_bytes = width * nc * (bpc // 8)
 
     # Allocate full image buffer
     full_buf = bytearray(height * pixel_row_bytes)

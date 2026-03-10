@@ -22,7 +22,7 @@ Platform backends and their Python bindings are installed automatically by pip:
 |----------|---------|-------------------|--------------------|
 | **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`), `libjpeg-turbo` (`apt install libturbojpeg0-dev`) |
 | **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
-| **Windows 10+** | WIA ([comtypes](https://github.com/enthought/comtypes)) | `comtypes` (auto) | *none* |
+| **Windows 10+** | WIA 2.0 ([comtypes](https://github.com/enthought/comtypes)) | `comtypes` (auto) | *none* |
 
 Page encoding supports JPEG (platform-native: ImageIO on macOS, WIC on Windows, libjpeg-turbo on Linux) and lossless PNG (stdlib `zlib`, no external dependency).
 
@@ -92,6 +92,31 @@ def prompt_next(pages_so_far: int) -> bool:
 with scanners[0] as scanner:
     doc = scanner.scan(next_page=prompt_next)
     # doc is a single multi-page PDF
+```
+
+## Page-Level Scanning
+
+Use `scan_pages()` for page preview, rotation, and reordering before assembling the final PDF:
+
+```python
+import scanlib
+
+with scanners[0] as scanner:
+    pages = list(scanner.scan_pages())
+
+# Preview each page
+for i, page in enumerate(pages):
+    with open(f"page_{i}.jpg", "wb") as f:
+        f.write(page.to_jpeg())
+
+# Rotate a page 90° clockwise
+pages[0] = pages[0].rotate(90)
+
+# Reorder, filter, then build the final PDF
+pages.reverse()
+doc = scanlib.build_pdf(pages, dpi=300)
+with open("output.pdf", "wb") as f:
+    f.write(doc.data)
 ```
 
 ## Progress Callback

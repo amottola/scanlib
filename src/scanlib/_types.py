@@ -101,9 +101,10 @@ class ScannedPage:
     """A single scanned page with raw pixel data.
 
     *data* contains raw pixel bytes with no header or wrapper —
-    1 byte per pixel for grayscale (*color_type* 0) or 3 bytes per
-    pixel (R, G, B) for color (*color_type* 2).  *color_type* follows
-    PNG conventions.
+    1 byte per pixel for grayscale (*color_type* 0, *bit_depth* 8),
+    3 bytes per pixel (R, G, B) for color (*color_type* 2, *bit_depth* 8),
+    or 1-bit packed (MSB first) for black & white (*color_type* 0,
+    *bit_depth* 1).  *color_type* follows PNG conventions.
     """
 
     data: bytes
@@ -145,13 +146,18 @@ class ScannedPage:
 
         Uses a platform-native encoder (ImageIO on macOS, WIC on
         Windows, libjpeg-turbo on Linux).  *quality* ranges from
-        1 (smallest) to 100 (best).
+        1 (smallest) to 100 (best).  1-bit BW pages are unpacked to
+        8-bit grayscale before encoding.
         """
         from ._jpeg import encode_jpeg
 
-        return encode_jpeg(
-            self.data, self.width, self.height, self.color_type, quality,
-        )
+        data = self.data
+        ct = self.color_type
+        if self.bit_depth == 1:
+            from _scanlib_accel import bw_to_gray
+
+            data = bw_to_gray(self.data, self.width, self.height)
+        return encode_jpeg(data, self.width, self.height, ct, quality)
 
     def to_png(self) -> bytes:
         """Encode the page as lossless PNG and return the bytes.
@@ -467,7 +473,7 @@ def build_pdf(
 
     Returns a :class:`ScannedDocument` containing the PDF bytes.
     """
-    from _scanlib_accel import gray_to_bw, rgb_to_gray
+    from _scanlib_accel import bw_to_gray, gray_to_bw, rgb_to_gray
 
     from ._jpeg import encode_jpeg
 
@@ -491,12 +497,18 @@ def build_pdf(
         if color_mode == ColorMode.GRAY:
             if ct == 2:
                 raw_pixels = rgb_to_gray(raw_pixels, w, h)
+            elif bd == 1:
+                raw_pixels = bw_to_gray(raw_pixels, w, h)
             ct = 0
             bd = 8
         elif color_mode == ColorMode.BW:
             if ct == 2:
                 raw_pixels = rgb_to_gray(raw_pixels, w, h)
+                bd = 8
             if image_format == ImageFormat.JPEG:
+                # JPEG can't encode 1-bit; unpack to 8-bit grayscale
+                if bd == 1:
+                    raw_pixels = bw_to_gray(raw_pixels, w, h)
                 ct = 0
                 bd = 8
             else:
