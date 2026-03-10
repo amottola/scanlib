@@ -1,6 +1,7 @@
 """Sphinx configuration for scanlib documentation."""
 
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -8,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 project = "scanlib"
 copyright = "2026, Angelo Mottola"
 author = "Angelo Mottola"
-release = "0.1.0"
+release = version("scanlib")
 
 extensions = [
     "sphinx.ext.autodoc",

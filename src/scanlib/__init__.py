@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sys
+from importlib.metadata import version
+
+__version__ = version("scanlib")
 
 from ._types import (
     DISCOVERY_TIMEOUT,
