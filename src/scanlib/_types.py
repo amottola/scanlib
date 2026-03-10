@@ -117,6 +117,29 @@ class ScannedPage:
         """The color mode of this page."""
         return ColorMode.GRAY if self.color_type == 0 else ColorMode.COLOR
 
+    def rotate(self, degrees: int) -> ScannedPage:
+        """Rotate the page clockwise by 90, 180, or 270 degrees.
+
+        Returns a new :class:`ScannedPage` with the rotated pixel data.
+        For 90° and 270° rotations, width and height are swapped.
+        """
+        if degrees not in (90, 180, 270):
+            raise ValueError(f"degrees must be 90, 180, or 270, got {degrees}")
+        from _scanlib_accel import rotate_pixels
+
+        rotated = rotate_pixels(
+            self.data, self.width, self.height,
+            self.color_type, self.bit_depth, degrees,
+        )
+        if degrees == 180:
+            new_w, new_h = self.width, self.height
+        else:
+            new_w, new_h = self.height, self.width
+        return ScannedPage(
+            data=rotated, width=new_w, height=new_h,
+            color_type=self.color_type, bit_depth=self.bit_depth,
+        )
+
     def to_jpeg(self, quality: int = 85) -> bytes:
         """Encode the page as JPEG and return the bytes.
 

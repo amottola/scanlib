@@ -135,6 +135,9 @@ a PDF with ``build_pdf()``:
        with open(f"page_{i}.jpg", "wb") as f:
            f.write(page.to_jpeg())
 
+   # Rotate a page 90° clockwise
+   pages[0] = pages[0].rotate(90)
+
    # Reorder, filter, then build the final PDF
    pages.reverse()
    doc = scanlib.build_pdf(pages, dpi=300)

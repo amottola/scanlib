@@ -291,6 +291,121 @@ class TestScannedPage:
         assert ct == 2
 
 
+class TestRotate:
+    def _rgb_page(self, width, height):
+        """Create an RGB page with unique pixel values per position."""
+        data = bytearray()
+        for y in range(height):
+            for x in range(width):
+                data.extend([x & 0xFF, y & 0xFF, (x + y) & 0xFF])
+        return ScannedPage(
+            data=bytes(data), width=width, height=height,
+            color_type=2, bit_depth=8,
+        )
+
+    def _gray_page(self, width, height):
+        """Create a grayscale page with unique pixel values per position."""
+        data = bytes(
+            (y * width + x) & 0xFF
+            for y in range(height) for x in range(width)
+        )
+        return ScannedPage(
+            data=data, width=width, height=height,
+            color_type=0, bit_depth=8,
+        )
+
+    def _get_rgb_pixel(self, page, x, y):
+        off = (y * page.width + x) * 3
+        return (page.data[off], page.data[off + 1], page.data[off + 2])
+
+    def _get_gray_pixel(self, page, x, y):
+        return page.data[y * page.width + x]
+
+    def test_rotate_90_rgb(self):
+        # 3x2 image: pixel (x,y) -> (h-1-y, x) in new (2x3) image
+        page = self._rgb_page(3, 2)
+        r = page.rotate(90)
+        assert r.width == 2
+        assert r.height == 3
+        # Original (0,0) -> rotated (1, 0)
+        assert self._get_rgb_pixel(r, 1, 0) == self._get_rgb_pixel(page, 0, 0)
+        # Original (2,0) -> rotated (1, 2)
+        assert self._get_rgb_pixel(r, 1, 2) == self._get_rgb_pixel(page, 2, 0)
+        # Original (0,1) -> rotated (0, 0)
+        assert self._get_rgb_pixel(r, 0, 0) == self._get_rgb_pixel(page, 0, 1)
+
+    def test_rotate_180_rgb(self):
+        page = self._rgb_page(3, 2)
+        r = page.rotate(180)
+        assert r.width == 3
+        assert r.height == 2
+        # (0,0) -> (2, 1)
+        assert self._get_rgb_pixel(r, 2, 1) == self._get_rgb_pixel(page, 0, 0)
+        # (2,1) -> (0, 0)
+        assert self._get_rgb_pixel(r, 0, 0) == self._get_rgb_pixel(page, 2, 1)
+
+    def test_rotate_270_rgb(self):
+        page = self._rgb_page(3, 2)
+        r = page.rotate(270)
+        assert r.width == 2
+        assert r.height == 3
+        # Original (0,0) -> rotated (0, 2)
+        assert self._get_rgb_pixel(r, 0, 2) == self._get_rgb_pixel(page, 0, 0)
+        # Original (2,1) -> rotated (1, 0)
+        assert self._get_rgb_pixel(r, 1, 0) == self._get_rgb_pixel(page, 2, 1)
+
+    def test_rotate_90_gray(self):
+        page = self._gray_page(4, 3)
+        r = page.rotate(90)
+        assert r.width == 3
+        assert r.height == 4
+        # (0,0) -> (2, 0)
+        assert self._get_gray_pixel(r, 2, 0) == self._get_gray_pixel(page, 0, 0)
+        # (3,2) -> (0, 3)
+        assert self._get_gray_pixel(r, 0, 3) == self._get_gray_pixel(page, 3, 2)
+
+    def test_rotate_180_gray(self):
+        page = self._gray_page(4, 3)
+        r = page.rotate(180)
+        assert r.width == 4
+        assert r.height == 3
+        assert self._get_gray_pixel(r, 3, 2) == self._get_gray_pixel(page, 0, 0)
+        assert self._get_gray_pixel(r, 0, 0) == self._get_gray_pixel(page, 3, 2)
+
+    def test_rotate_invalid_degrees(self):
+        page = self._gray_page(4, 4)
+        with pytest.raises(ValueError):
+            page.rotate(45)
+        with pytest.raises(ValueError):
+            page.rotate(0)
+        with pytest.raises(ValueError):
+            page.rotate(360)
+
+    def test_rotate_dimensions_swap(self):
+        page = self._gray_page(5, 3)
+        assert page.rotate(90).width == 3
+        assert page.rotate(90).height == 5
+        assert page.rotate(180).width == 5
+        assert page.rotate(180).height == 3
+        assert page.rotate(270).width == 3
+        assert page.rotate(270).height == 5
+
+    def test_rotate_preserves_color_type(self):
+        rgb = self._rgb_page(4, 4).rotate(90)
+        assert rgb.color_type == 2
+        assert rgb.bit_depth == 8
+        gray = self._gray_page(4, 4).rotate(90)
+        assert gray.color_type == 0
+        assert gray.bit_depth == 8
+
+    def test_rotate_roundtrip(self):
+        page = self._rgb_page(5, 3)
+        r = page.rotate(90).rotate(90).rotate(90).rotate(90)
+        assert r.width == page.width
+        assert r.height == page.height
+        assert r.data == page.data
+
+
 class TestScanPages:
     def test_scan_pages_raises_when_not_open(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")

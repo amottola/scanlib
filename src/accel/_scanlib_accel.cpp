@@ -413,6 +413,174 @@ static PyObject *py_bmp_to_raw(PyObject * /*self*/, PyObject *args) {
 }
 
 /* ------------------------------------------------------------------ */
+/* rotate_pixels                                                      */
+/* ------------------------------------------------------------------ */
+
+static PyObject *py_rotate_pixels(PyObject * /*self*/, PyObject *args) {
+    Py_buffer data;
+    int width, height, color_type, bit_depth, degrees;
+
+    if (!PyArg_ParseTuple(args, "y*iiiii", &data, &width, &height,
+                          &color_type, &bit_depth, &degrees))
+        return nullptr;
+
+    if (degrees != 90 && degrees != 180 && degrees != 270) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError,
+                        "degrees must be 90, 180, or 270");
+        return nullptr;
+    }
+
+    if (width <= 0 || height <= 0) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "invalid dimensions");
+        return nullptr;
+    }
+
+    int bpp;  /* bytes per pixel for 8-bit modes */
+    Py_ssize_t expected;
+    if (bit_depth == 1) {
+        bpp = 0;
+        int row_bytes = (width + 7) / 8;
+        expected = static_cast<Py_ssize_t>(row_bytes) * height;
+    } else if (color_type == 0) {
+        bpp = 1;
+        expected = static_cast<Py_ssize_t>(width) * height;
+    } else {
+        bpp = 3;
+        expected = static_cast<Py_ssize_t>(width) * height * 3;
+    }
+
+    if (data.len < expected) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
+        return nullptr;
+    }
+
+    const auto *src = static_cast<const unsigned char *>(data.buf);
+    int new_w = (degrees == 180) ? width : height;
+    int new_h = (degrees == 180) ? height : width;
+
+    PyObject *result = nullptr;
+
+    if (bit_depth == 1) {
+        /* ---- 1-bit packed rotation ---- */
+        int src_row_bytes = (width + 7) / 8;
+        int dst_row_bytes = (new_w + 7) / 8;
+        Py_ssize_t out_len = static_cast<Py_ssize_t>(dst_row_bytes) * new_h;
+
+        result = PyBytes_FromStringAndSize(nullptr, out_len);
+        if (!result) {
+            PyBuffer_Release(&data);
+            return nullptr;
+        }
+        auto *dst = reinterpret_cast<unsigned char *>(
+            PyBytes_AS_STRING(result));
+        std::memset(dst, 0, static_cast<size_t>(out_len));
+
+        Py_BEGIN_ALLOW_THREADS
+        if (degrees == 180) {
+            for (int y = 0; y < height; y++) {
+                int dy = height - 1 - y;
+                for (int x = 0; x < width; x++) {
+                    int dx = width - 1 - x;
+                    int src_bit = (src[y * src_row_bytes + x / 8]
+                                   >> (7 - (x & 7))) & 1;
+                    if (src_bit)
+                        dst[dy * dst_row_bytes + dx / 8] |=
+                            static_cast<unsigned char>(0x80 >> (dx & 7));
+                }
+            }
+        } else {
+            /* 90/270: unpack, rotate, repack */
+            Py_ssize_t npix = static_cast<Py_ssize_t>(width) * height;
+            auto *tmp = new unsigned char[npix];
+
+            /* Unpack bits to bytes (1 = white, 0 = black) */
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    tmp[y * width + x] =
+                        (src[y * src_row_bytes + x / 8]
+                         >> (7 - (x & 7))) & 1;
+                }
+            }
+
+            /* Rotate and repack */
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int dx, dy;
+                    if (degrees == 90) {
+                        dx = height - 1 - y;
+                        dy = x;
+                    } else { /* 270 */
+                        dx = y;
+                        dy = width - 1 - x;
+                    }
+                    if (tmp[y * width + x])
+                        dst[dy * dst_row_bytes + dx / 8] |=
+                            static_cast<unsigned char>(0x80 >> (dx & 7));
+                }
+            }
+            delete[] tmp;
+        }
+        Py_END_ALLOW_THREADS
+    } else {
+        /* ---- 8-bit grayscale or RGB rotation ---- */
+        Py_ssize_t out_len = static_cast<Py_ssize_t>(new_w) * new_h * bpp;
+
+        result = PyBytes_FromStringAndSize(nullptr, out_len);
+        if (!result) {
+            PyBuffer_Release(&data);
+            return nullptr;
+        }
+        auto *dst = reinterpret_cast<unsigned char *>(
+            PyBytes_AS_STRING(result));
+
+        Py_BEGIN_ALLOW_THREADS
+        if (degrees == 180) {
+            for (int y = 0; y < height; y++) {
+                int dy = height - 1 - y;
+                const auto *srow = src + y * width * bpp;
+                auto *drow = dst + dy * width * bpp;
+                for (int x = 0; x < width; x++) {
+                    int dx = width - 1 - x;
+                    std::memcpy(drow + dx * bpp, srow + x * bpp,
+                                static_cast<size_t>(bpp));
+                }
+            }
+        } else if (degrees == 90) {
+            /* (x,y) -> (h-1-y, x) in new (h x w) image */
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int dx = height - 1 - y;
+                    int dy = x;
+                    std::memcpy(
+                        dst + (dy * new_w + dx) * bpp,
+                        src + (y * width + x) * bpp,
+                        static_cast<size_t>(bpp));
+                }
+            }
+        } else { /* 270 */
+            /* (x,y) -> (y, w-1-x) in new (h x w) image */
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int dx = y;
+                    int dy = width - 1 - x;
+                    std::memcpy(
+                        dst + (dy * new_w + dx) * bpp,
+                        src + (y * width + x) * bpp,
+                        static_cast<size_t>(bpp));
+                }
+            }
+        }
+        Py_END_ALLOW_THREADS
+    }
+
+    PyBuffer_Release(&data);
+    return result;
+}
+
+/* ------------------------------------------------------------------ */
 /* Module definition                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -436,6 +604,10 @@ static PyMethodDef methods[] = {
      "bmp_to_raw(data) -> tuple[bytes, int, int, int, int]\n"
      "Convert BMP file bytes to raw pixels. Returns "
      "(raw_data, width, height, color_type, bit_depth)."},
+    {"rotate_pixels", py_rotate_pixels, METH_VARARGS,
+     "rotate_pixels(data, width, height, color_type, bit_depth, degrees)"
+     " -> bytes\n"
+     "Rotate raw pixels clockwise by 90, 180, or 270 degrees."},
     {nullptr, nullptr, 0, nullptr}
 };
 
@@ -449,7 +621,7 @@ static PyModuleDef_Slot module_slots[] = {
 static struct PyModuleDef module = {
     PyModuleDef_HEAD_INIT,
     "_scanlib_accel",
-    "Accelerated helpers for scanlib (pixel conversion, BMP parsing).",
+    "Accelerated helpers for scanlib (pixel conversion, rotation, BMP parsing).",
     0,
     methods,
     module_slots,
