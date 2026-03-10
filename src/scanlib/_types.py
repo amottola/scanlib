@@ -101,22 +101,15 @@ class ScannedPage:
     """A single scanned page with raw pixel data.
 
     *data* contains raw pixel bytes with no header or wrapper —
-    1 byte per pixel for grayscale (*color_type* 0, *bit_depth* 8),
-    3 bytes per pixel (R, G, B) for color (*color_type* 2, *bit_depth* 8),
-    or 1-bit packed (MSB first) for black & white (*color_type* 0,
-    *bit_depth* 1).  *color_type* follows PNG conventions.
+    1 byte per pixel for grayscale (:attr:`ColorMode.GRAY`),
+    3 bytes per pixel (R, G, B) for color (:attr:`ColorMode.COLOR`),
+    or 1-bit packed (MSB first) for black & white (:attr:`ColorMode.BW`).
     """
 
     data: bytes
     width: int
     height: int
-    color_type: int
-    bit_depth: int
-
-    @property
-    def color_mode(self) -> ColorMode:
-        """The color mode of this page."""
-        return ColorMode.GRAY if self.color_type == 0 else ColorMode.COLOR
+    color_mode: ColorMode
 
     def rotate(self, degrees: int) -> ScannedPage:
         """Rotate the page clockwise by 90, 180, or 270 degrees.
@@ -130,7 +123,7 @@ class ScannedPage:
 
         rotated = rotate_pixels(
             self.data, self.width, self.height,
-            self.color_type, self.bit_depth, degrees,
+            _BPP[self.color_mode], degrees,
         )
         if degrees == 180:
             new_w, new_h = self.width, self.height
@@ -138,7 +131,7 @@ class ScannedPage:
             new_w, new_h = self.height, self.width
         return ScannedPage(
             data=rotated, width=new_w, height=new_h,
-            color_type=self.color_type, bit_depth=self.bit_depth,
+            color_mode=self.color_mode,
         )
 
     def to_jpeg(self, quality: int = 85) -> bytes:
@@ -152,12 +145,13 @@ class ScannedPage:
         from ._jpeg import encode_jpeg
 
         data = self.data
-        ct = self.color_type
-        if self.bit_depth == 1:
+        mode = self.color_mode
+        if mode == ColorMode.BW:
             from _scanlib_accel import bw_to_gray
 
             data = bw_to_gray(self.data, self.width, self.height)
-        return encode_jpeg(data, self.width, self.height, ct, quality)
+            mode = ColorMode.GRAY
+        return encode_jpeg(data, self.width, self.height, mode, quality)
 
     def to_png(self) -> bytes:
         """Encode the page as lossless PNG and return the bytes.
@@ -165,11 +159,11 @@ class ScannedPage:
         Uses stdlib ``zlib`` for compression — no external dependency.
         """
         w, h = self.width, self.height
-        ct, bd = self.color_type, self.bit_depth
+        png_ct, png_bd = _PNG_MODE[self.color_mode]
 
-        if bd == 1:
+        if self.color_mode == ColorMode.BW:
             row_bytes = (w + 7) // 8
-        elif ct == 2:
+        elif self.color_mode == ColorMode.COLOR:
             row_bytes = w * 3
         else:
             row_bytes = w
@@ -186,13 +180,26 @@ class ScannedPage:
             crc = zlib.crc32(tag + data) & 0xFFFFFFFF
             return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
 
-        ihdr_data = struct.pack(">IIBBBBB", w, h, bd, ct, 0, 0, 0)
+        ihdr_data = struct.pack(">IIBBBBB", w, h, png_bd, png_ct, 0, 0, 0)
         return (
             b"\x89PNG\r\n\x1a\n"
             + _chunk(b"IHDR", ihdr_data)
             + _chunk(b"IDAT", compressed)
             + _chunk(b"IEND", b"")
         )
+
+
+# Lookup tables for ColorMode → internal format details.
+_BPP: dict[ColorMode, int] = {
+    ColorMode.BW: 0,       # 1-bit packed
+    ColorMode.GRAY: 1,
+    ColorMode.COLOR: 3,
+}
+_PNG_MODE: dict[ColorMode, tuple[int, int]] = {
+    ColorMode.BW: (0, 1),      # grayscale, 1-bit
+    ColorMode.GRAY: (0, 8),    # grayscale, 8-bit
+    ColorMode.COLOR: (2, 8),   # RGB, 8-bit
+}
 
 
 @dataclass(frozen=True)
@@ -492,45 +499,41 @@ def build_pdf(
     for page in pages:
         w, h = page.width, page.height
         raw_pixels = page.data
-        ct = page.color_type
-        bd = page.bit_depth
+        mode = page.color_mode
 
         if first_w == 0:
             first_w, first_h = w, h
 
         # Apply color mode conversion
         if color_mode == ColorMode.GRAY:
-            if ct == 2:
+            if mode == ColorMode.COLOR:
                 raw_pixels = rgb_to_gray(raw_pixels, w, h)
-            elif bd == 1:
+            elif mode == ColorMode.BW:
                 raw_pixels = bw_to_gray(raw_pixels, w, h)
-            ct = 0
-            bd = 8
+            mode = ColorMode.GRAY
         elif color_mode == ColorMode.BW:
-            if ct == 2:
+            if mode == ColorMode.COLOR:
                 raw_pixels = rgb_to_gray(raw_pixels, w, h)
-                bd = 8
+                mode = ColorMode.GRAY
             if image_format == ImageFormat.JPEG:
                 # JPEG can't encode 1-bit; unpack to 8-bit grayscale
-                if bd == 1:
+                if mode == ColorMode.BW:
                     raw_pixels = bw_to_gray(raw_pixels, w, h)
-                ct = 0
-                bd = 8
+                mode = ColorMode.GRAY
             else:
-                if bd == 8:
+                if mode == ColorMode.GRAY:
                     raw_pixels = gray_to_bw(raw_pixels, w, h)
-                ct = 0
-                bd = 1
+                mode = ColorMode.BW
 
         # Encode image data
         if image_format == ImageFormat.JPEG:
-            img_stream = encode_jpeg(raw_pixels, w, h, ct, jpeg_quality)
+            img_stream = encode_jpeg(raw_pixels, w, h, mode, jpeg_quality)
             filter_name = "/DCTDecode"
             pdf_bpc = 8
         else:
-            if bd == 1:
+            if mode == ColorMode.BW:
                 row_bytes = (w + 7) // 8
-            elif ct == 2:
+            elif mode == ColorMode.COLOR:
                 row_bytes = w * 3
             else:
                 row_bytes = w
@@ -543,9 +546,9 @@ def build_pdf(
 
             img_stream = zlib.compress(bytes(filtered))
             filter_name = "/FlateDecode"
-            pdf_bpc = bd
+            pdf_bpc = 1 if mode == ColorMode.BW else 8
 
-        color_space = "/DeviceGray" if ct == 0 else "/DeviceRGB"
+        color_space = "/DeviceRGB" if mode == ColorMode.COLOR else "/DeviceGray"
 
         # Image XObject
         img_obj_id = len(objects)

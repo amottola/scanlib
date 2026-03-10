@@ -174,8 +174,7 @@ class TestSaneBackend:
         assert len(pages) == 1
         assert pages[0].width == 100
         assert pages[0].height == 200
-        assert pages[0].color_type == 2  # RGB
-        assert pages[0].bit_depth == 8
+        assert pages[0].color_mode == ColorMode.COLOR
         assert len(pages[0].data) == 100 * 200 * 3
 
     def test_scan_pages_not_open_raises(self, mock_sane):
@@ -284,8 +283,7 @@ class TestSaneBackend:
 
         pages = list(backend.scan_pages(scanner, ScanOptions(progress=lambda pct: None)))
         assert len(pages) == 1
-        assert pages[0].color_type == 0  # grayscale
-        assert pages[0].bit_depth == 8
+        assert pages[0].color_mode == ColorMode.GRAY
 
     def test_scan_pages_hardware_cancel_raises_scan_aborted(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -323,8 +321,7 @@ class TestSaneBackend:
 
         assert len(pages) == 3
         for p in pages:
-            assert p.color_type == 0
-            assert p.bit_depth == 8
+            assert p.color_mode == ColorMode.GRAY
             assert p.width == 50
             assert p.height == 50
 
@@ -362,8 +359,7 @@ class TestSaneBackend:
 
         pages = list(backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.COLOR)))
         assert len(pages) == 1
-        assert pages[0].color_type == 2  # RGB
-        assert pages[0].bit_depth == 8
+        assert pages[0].color_mode == ColorMode.COLOR
         assert pages[0].width == 4
         assert pages[0].height == 2
         assert len(pages[0].data) == 4 * 2 * 3
@@ -379,8 +375,7 @@ class TestSaneBackend:
 
         pages = list(backend.scan_pages(scanner, ScanOptions(color_mode=ColorMode.GRAY)))
         assert len(pages) == 1
-        assert pages[0].color_type == 0  # grayscale
-        assert pages[0].bit_depth == 8
+        assert pages[0].color_mode == ColorMode.GRAY
 
     def test_open_scanner_populates_defaults(self, mock_sane):
         """Defaults are read from device options after open."""

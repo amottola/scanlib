@@ -12,6 +12,8 @@ import ctypes
 import ctypes.util
 import sys
 
+from ._types import ColorMode
+
 if sys.platform == "darwin":
     # ------------------------------------------------------------------ #
     # macOS ImageIO encoder (ctypes)                                      #
@@ -99,17 +101,15 @@ if sys.platform == "darwin":
     )
 
     def encode_jpeg(
-        pixels: bytes, width: int, height: int, color_type: int, quality: int,
+        pixels: bytes, width: int, height: int, color_mode: ColorMode, quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using macOS ImageIO."""
-        if color_type == 0:
-            components = 1
-            cs_name = _kCGColorSpaceGenericGray
-        elif color_type == 2:
+        if color_mode == ColorMode.COLOR:
             components = 3
             cs_name = _kCGColorSpaceSRGB
         else:
-            raise ValueError(f"color_type must be 0 or 2, got {color_type}")
+            components = 1
+            cs_name = _kCGColorSpaceGenericGray
 
         bytes_per_row = width * components
         bits_per_pixel = 8 * components
@@ -273,20 +273,18 @@ elif sys.platform == "win32":
         return _wic_factory
 
     def encode_jpeg(
-        pixels: bytes, width: int, height: int, color_type: int, quality: int,
+        pixels: bytes, width: int, height: int, color_mode: ColorMode, quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using Windows WIC."""
         from _scanlib_accel import rgb_to_bgr
 
-        if color_type == 0:
-            pixel_fmt = _GUID_WICPixelFormat8bppGray
-            stride = width
-        elif color_type == 2:
+        if color_mode == ColorMode.COLOR:
             pixel_fmt = _GUID_WICPixelFormat24bppBGR
             stride = width * 3
             pixels = rgb_to_bgr(pixels, width, height)
         else:
-            raise ValueError(f"color_type must be 0 or 2, got {color_type}")
+            pixel_fmt = _GUID_WICPixelFormat8bppGray
+            stride = width
 
         factory = _get_wic_factory()
         stream = c_void_p()
@@ -451,19 +449,17 @@ else:
         )
 
     def encode_jpeg(
-        pixels: bytes, width: int, height: int, color_type: int, quality: int,
+        pixels: bytes, width: int, height: int, color_mode: ColorMode, quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using libjpeg-turbo."""
-        if color_type == 0:
-            pixel_format = _TJPF_GRAY
-            subsamp = _TJSAMP_GRAY
-            pitch = width
-        elif color_type == 2:
+        if color_mode == ColorMode.COLOR:
             pixel_format = _TJPF_RGB
             subsamp = _TJSAMP_420
             pitch = width * 3
         else:
-            raise ValueError(f"color_type must be 0 or 2, got {color_type}")
+            pixel_format = _TJPF_GRAY
+            subsamp = _TJSAMP_GRAY
+            pitch = width
 
         src = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
         jpeg_buf = ctypes.POINTER(ctypes.c_ubyte)()

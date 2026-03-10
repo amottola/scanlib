@@ -144,6 +144,14 @@ _WIA_DATATYPE_TO_COLOR = {
 }
 _COLOR_TO_WIA_DATATYPE = {v: k for k, v in _WIA_DATATYPE_TO_COLOR.items()}
 
+# Map bmp_to_raw's (color_type, bit_depth) return to ColorMode
+_BMP_COLOR_MODE = {
+    (0, 1): ColorMode.BW,
+    (0, 8): ColorMode.GRAY,
+    (2, 8): ColorMode.COLOR,
+    (6, 8): ColorMode.COLOR,  # RGBA → treated as COLOR
+}
+
 _MM10_PER_THOUSANDTH_INCH = 0.254
 
 # ---------------------------------------------------------------------------
@@ -630,10 +638,11 @@ class _TransferCallback(COMObject):
                 bmp_data = _read_stream_data(self._current_stream)
                 if bmp_data:
                     raw, w, h, ct, bd = _bmp_to_raw(bmp_data)
+                    mode = _BMP_COLOR_MODE.get((ct, bd), ColorMode.COLOR)
                     self.pages.append(
                         ScannedPage(
                             data=raw, width=w, height=h,
-                            color_type=ct, bit_depth=bd,
+                            color_mode=mode,
                         )
                     )
                 self._current_stream = None

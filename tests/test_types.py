@@ -229,9 +229,9 @@ class TestScannerNotOpenError:
         assert issubclass(ScannerNotOpenError, ScanLibError)
 
 
-def _make_page(width=16, height=16, color_type=2, bit_depth=8):
+def _make_page(width=16, height=16, color_mode=ColorMode.COLOR):
     """Create a ScannedPage with deterministic pixel data."""
-    if bit_depth == 1:
+    if color_mode == ColorMode.BW:
         # 1-bit packed data (MSB first)
         row_bytes = (width + 7) // 8
         buf = bytearray(row_bytes * height)
@@ -241,7 +241,7 @@ def _make_page(width=16, height=16, color_type=2, bit_depth=8):
                 if (x + y) % 2 == 0:
                     buf[y * row_bytes + x // 8] |= 0x80 >> (x & 7)
         data = bytes(buf)
-    elif color_type == 2:
+    elif color_mode == ColorMode.COLOR:
         channels = 3
         data = bytes(
             [(y * 37 + x * 13) & 0xFF
@@ -257,44 +257,44 @@ def _make_page(width=16, height=16, color_type=2, bit_depth=8):
         )
     return ScannedPage(
         data=data, width=width, height=height,
-        color_type=color_type, bit_depth=bit_depth,
+        color_mode=color_mode,
     )
 
 
 class TestScannedPage:
     def test_color_mode_rgb(self):
-        page = _make_page(color_type=2)
+        page = _make_page(color_mode=ColorMode.COLOR)
         assert page.color_mode == ColorMode.COLOR
 
     def test_color_mode_gray(self):
-        page = _make_page(color_type=0)
+        page = _make_page(color_mode=ColorMode.GRAY)
         assert page.color_mode == ColorMode.GRAY
 
     def test_to_jpeg_rgb(self):
-        page = _make_page(color_type=2)
+        page = _make_page(color_mode=ColorMode.COLOR)
         jpg = page.to_jpeg()
         assert jpg[:2] == b"\xff\xd8"  # SOI marker
         assert jpg[-2:] == b"\xff\xd9"  # EOI marker
 
     def test_to_jpeg_gray(self):
-        page = _make_page(color_type=0)
+        page = _make_page(color_mode=ColorMode.GRAY)
         jpg = page.to_jpeg(quality=50)
         assert jpg[:2] == b"\xff\xd8"
 
     def test_to_png_rgb(self):
-        page = _make_page(color_type=2)
+        page = _make_page(color_mode=ColorMode.COLOR)
         png = page.to_png()
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_to_png_gray(self):
-        page = _make_page(color_type=0)
+        page = _make_page(color_mode=ColorMode.GRAY)
         png = page.to_png()
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_to_png_roundtrip(self):
         """PNG output can be decoded (validate structure)."""
         import struct, zlib
-        page = _make_page(width=4, height=4, color_type=2)
+        page = _make_page(width=4, height=4, color_mode=ColorMode.COLOR)
         png = page.to_png()
         # Parse IHDR
         ihdr_len = struct.unpack(">I", png[8:12])[0]
@@ -315,7 +315,7 @@ class TestRotate:
                 data.extend([x & 0xFF, y & 0xFF, (x + y) & 0xFF])
         return ScannedPage(
             data=bytes(data), width=width, height=height,
-            color_type=2, bit_depth=8,
+            color_mode=ColorMode.COLOR,
         )
 
     def _gray_page(self, width, height):
@@ -326,7 +326,7 @@ class TestRotate:
         )
         return ScannedPage(
             data=data, width=width, height=height,
-            color_type=0, bit_depth=8,
+            color_mode=ColorMode.GRAY,
         )
 
     def _get_rgb_pixel(self, page, x, y):
@@ -405,13 +405,11 @@ class TestRotate:
         assert page.rotate(270).width == 3
         assert page.rotate(270).height == 5
 
-    def test_rotate_preserves_color_type(self):
+    def test_rotate_preserves_color_mode(self):
         rgb = self._rgb_page(4, 4).rotate(90)
-        assert rgb.color_type == 2
-        assert rgb.bit_depth == 8
+        assert rgb.color_mode == ColorMode.COLOR
         gray = self._gray_page(4, 4).rotate(90)
-        assert gray.color_type == 0
-        assert gray.bit_depth == 8
+        assert gray.color_mode == ColorMode.GRAY
 
     def test_rotate_roundtrip(self):
         page = self._rgb_page(5, 3)
@@ -472,7 +470,7 @@ class TestBuildPdf:
 
     def test_bw_page_jpeg_format(self):
         """BW page encoded as JPEG in PDF (must unpack to 8-bit)."""
-        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
         doc = build_pdf([page], color_mode=ColorMode.BW,
                         image_format=ImageFormat.JPEG)
         assert doc.data[:8] == b"%PDF-1.4"
@@ -480,7 +478,7 @@ class TestBuildPdf:
 
     def test_bw_page_png_format(self):
         """BW page encoded as PNG in PDF (stays 1-bit)."""
-        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
         doc = build_pdf([page], color_mode=ColorMode.BW,
                         image_format=ImageFormat.PNG)
         assert doc.data[:8] == b"%PDF-1.4"
@@ -489,7 +487,7 @@ class TestBuildPdf:
 
     def test_bw_page_as_gray(self):
         """BW page converted to grayscale in PDF (must unpack to 8-bit)."""
-        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
         doc = build_pdf([page], color_mode=ColorMode.GRAY)
         assert doc.data[:8] == b"%PDF-1.4"
         assert b"/BitsPerComponent 8" in doc.data
@@ -529,7 +527,7 @@ class TestBwToGray:
 
     def test_to_jpeg_bw_page(self):
         """to_jpeg() works on 1-bit BW pages."""
-        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
         jpg = page.to_jpeg()
         assert jpg[:2] == b"\xff\xd8"
         assert jpg[-2:] == b"\xff\xd9"
@@ -537,7 +535,7 @@ class TestBwToGray:
     def test_to_png_bw_page(self):
         """to_png() works on 1-bit BW pages."""
         import struct
-        page = _make_page(width=16, height=16, color_type=0, bit_depth=1)
+        page = _make_page(width=16, height=16, color_mode=ColorMode.BW)
         png = page.to_png()
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
         # Parse IHDR to verify bit_depth=1

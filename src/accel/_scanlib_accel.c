@@ -481,10 +481,10 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
 
 static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
     Py_buffer data;
-    int width, height, color_type, bit_depth, degrees;
+    int width, height, bpp, degrees;
 
-    if (!PyArg_ParseTuple(args, "y*iiiii", &data, &width, &height,
-                          &color_type, &bit_depth, &degrees))
+    if (!PyArg_ParseTuple(args, "y*iiii", &data, &width, &height,
+                          &bpp, &degrees))
         return NULL;
 
     if (degrees != 90 && degrees != 180 && degrees != 270) {
@@ -500,18 +500,12 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
         return NULL;
     }
 
-    int bpp;  /* bytes per pixel for 8-bit modes */
     Py_ssize_t expected;
-    if (bit_depth == 1) {
-        bpp = 0;
+    if (bpp == 0) {
         int row_bytes = (width + 7) / 8;
         expected = (Py_ssize_t)row_bytes * height;
-    } else if (color_type == 0) {
-        bpp = 1;
-        expected = (Py_ssize_t)width * height;
     } else {
-        bpp = 3;
-        expected = (Py_ssize_t)width * height * 3;
+        expected = (Py_ssize_t)width * height * bpp;
     }
 
     if (data.len < expected) {
@@ -526,7 +520,7 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
 
     PyObject *result = NULL;
 
-    if (bit_depth == 1) {
+    if (bpp == 0) {
         /* ---- 1-bit packed rotation ---- */
         int src_row_bytes = (width + 7) / 8;
         int dst_row_bytes = (new_w + 7) / 8;
@@ -676,9 +670,9 @@ static PyMethodDef methods[] = {
      "Convert BMP file bytes to raw pixels. Returns "
      "(raw_data, width, height, color_type, bit_depth)."},
     {"rotate_pixels", py_rotate_pixels, METH_VARARGS,
-     "rotate_pixels(data, width, height, color_type, bit_depth, degrees)"
-     " -> bytes\n"
-     "Rotate raw pixels clockwise by 90, 180, or 270 degrees."},
+     "rotate_pixels(data, width, height, bpp, degrees) -> bytes\n"
+     "Rotate raw pixels clockwise by 90, 180, or 270 degrees.\n"
+     "bpp is bytes per pixel (0 for 1-bit packed, 1 for gray, 3 for RGB)."},
     {NULL, NULL, 0, NULL}
 };
 

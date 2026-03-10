@@ -182,7 +182,7 @@ def _assemble_image(
 ) -> tuple[bytes, int, int, int, int]:
     """Assemble band data into raw pixel bytes.
 
-    Returns (raw_pixels, width, height, color_type, bit_depth) where
+    Returns (raw_pixels, width, height, color_mode) where
     *raw_pixels* contains no PNG filter-byte prefix.
     """
     from _scanlib_accel import strip_alpha, trim_rows
@@ -211,17 +211,14 @@ def _assemble_image(
     # The scanner may return extra channels (e.g. 4-component RGBX for
     # RGB mode); strip them.
     if pdt == 0:  # BW — 1-bit grayscale
-        color_type = 0
-        bit_depth = 1
+        mode = ColorMode.BW
         packed_row = (width + 7) // 8
         raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, packed_row)
     elif pdt == 1:  # Gray — 8-bit grayscale
-        color_type = 0
-        bit_depth = 8
+        mode = ColorMode.GRAY
         raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, width)
     else:  # RGB (2) and others — 8-bit RGB
-        color_type = 2
-        bit_depth = 8
+        mode = ColorMode.COLOR
         if nc > 3:
             # Strip extra channels (e.g. RGBX → RGB) via C extension
             raw_pixels = strip_alpha(bytes(full_buf), width, height, nc)
@@ -229,7 +226,7 @@ def _assemble_image(
             rgb_row_bytes = width * 3
             raw_pixels = trim_rows(bytes(full_buf), height, pixel_row_bytes, rgb_row_bytes)
 
-    return raw_pixels, width, height, color_type, bit_depth
+    return raw_pixels, width, height, mode
 
 
 def _run_until(
@@ -705,12 +702,12 @@ class MacOSBackend:
                     )
 
                 for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
-                    raw, width, height, color_type, bit_depth = (
+                    raw, width, height, mode = (
                         _assemble_image(bands, w, h, bpc, nc, pdt)
                     )
                     all_pages.append(ScannedPage(
                         data=raw, width=width, height=height,
-                        color_type=color_type, bit_depth=bit_depth,
+                        color_mode=mode,
                     ))
 
                 if is_feeder:

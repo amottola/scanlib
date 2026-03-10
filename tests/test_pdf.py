@@ -6,12 +6,12 @@ from scanlib._types import ColorMode, ImageFormat, ScannedPage, build_pdf
 from _scanlib_accel import gray_to_bw, rgb_to_gray
 
 
-def _make_raw(width, height, color_type=2, bit_depth=8):
+def _make_raw(width, height, color_mode=ColorMode.COLOR):
     """Create raw pixel data for testing.
 
     Returns a ScannedPage with deterministic pixel values.
     """
-    if color_type == 0 and bit_depth == 1:
+    if color_mode == ColorMode.BW:
         # 1-bit grayscale: pack bits
         row_bytes = (width + 7) // 8
         data = bytearray(row_bytes * height)
@@ -21,23 +21,22 @@ def _make_raw(width, height, color_type=2, bit_depth=8):
                     data[y * row_bytes + x // 8] |= 1 << (7 - (x % 8))
         return ScannedPage(
             data=bytes(data), width=width, height=height,
-            color_type=color_type, bit_depth=bit_depth,
+            color_mode=color_mode,
         )
 
-    if color_type == 0:
+    if color_mode == ColorMode.GRAY:
         channels = 1
-    elif color_type == 2:
+    elif color_mode == ColorMode.COLOR:
         channels = 3
     else:
-        raise ValueError(f"Unsupported color type: {color_type}")
+        raise ValueError(f"Unsupported color mode: {color_mode}")
 
-    bpp = channels * bit_depth // 8
     data = bytes(
-        [(y * 37 + x * 13) & 0xFF for y in range(height) for x in range(width * bpp)]
+        [(y * 37 + x * 13) & 0xFF for y in range(height) for x in range(width * channels)]
     )
     return ScannedPage(
         data=data, width=width, height=height,
-        color_type=color_type, bit_depth=bit_depth,
+        color_mode=color_mode,
     )
 
 
@@ -45,7 +44,7 @@ class TestBuildPdfPng:
     """Tests for build_pdf with PNG (FlateDecode) encoding."""
 
     def test_single_page(self):
-        page = _make_raw(100, 200, color_type=2)
+        page = _make_raw(100, 200, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=300, image_format=ImageFormat.PNG)
         assert doc.data[:8] == b"%PDF-1.4"
         assert b"%%EOF" in doc.data
@@ -58,8 +57,8 @@ class TestBuildPdfPng:
         assert doc.height == 200
 
     def test_multi_page(self):
-        page1 = _make_raw(100, 200, color_type=2)
-        page2 = _make_raw(50, 100, color_type=0)
+        page1 = _make_raw(100, 200, color_mode=ColorMode.COLOR)
+        page2 = _make_raw(50, 100, color_mode=ColorMode.GRAY)
         doc = build_pdf([page1, page2], dpi=300, image_format=ImageFormat.PNG)
         assert doc.data[:8] == b"%PDF-1.4"
         assert b"/Count 2" in doc.data
@@ -68,13 +67,13 @@ class TestBuildPdfPng:
         assert doc.height == 200
 
     def test_grayscale_page(self):
-        page = _make_raw(10, 10, color_type=0)
+        page = _make_raw(10, 10, color_mode=ColorMode.GRAY)
         doc = build_pdf([page], dpi=72, image_format=ImageFormat.PNG)
         assert b"/DeviceGray" in doc.data
         assert b"/Type /Page" in doc.data
 
     def test_rgb_page(self):
-        page = _make_raw(10, 10, color_type=2)
+        page = _make_raw(10, 10, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=72, image_format=ImageFormat.PNG)
         assert b"/DeviceRGB" in doc.data
 
@@ -84,12 +83,12 @@ class TestBuildPdfPng:
 
     def test_page_dimensions(self):
         # 300 DPI, 300x600 px -> 72x144 pt
-        page = _make_raw(300, 600, color_type=2)
+        page = _make_raw(300, 600, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=300, image_format=ImageFormat.PNG)
         assert b"/MediaBox [0 0 72.0000 144.0000]" in doc.data
 
     def test_flatedecode_filter(self):
-        page = _make_raw(10, 10, color_type=2)
+        page = _make_raw(10, 10, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=72, image_format=ImageFormat.PNG)
         assert b"/FlateDecode" in doc.data
 
@@ -98,7 +97,7 @@ class TestBuildPdfJpeg:
     """Tests for build_pdf with JPEG (DCTDecode) encoding."""
 
     def test_single_page_rgb(self):
-        page = _make_raw(16, 16, color_type=2)
+        page = _make_raw(16, 16, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=300, image_format=ImageFormat.JPEG)
         assert doc.data[:8] == b"%PDF-1.4"
         assert b"/Filter /DCTDecode" in doc.data
@@ -107,14 +106,14 @@ class TestBuildPdfJpeg:
         assert doc.page_count == 1
 
     def test_single_page_grayscale(self):
-        page = _make_raw(16, 16, color_type=0)
+        page = _make_raw(16, 16, color_mode=ColorMode.GRAY)
         doc = build_pdf([page], dpi=300, image_format=ImageFormat.JPEG)
         assert b"/Filter /DCTDecode" in doc.data
         assert b"/DeviceGray" in doc.data
 
     def test_jpeg_produces_valid_dctdecode(self):
         """JPEG encoding produces a valid PDF with DCTDecode filter."""
-        page = _make_raw(100, 100, color_type=2)
+        page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=300, image_format=ImageFormat.JPEG)
         assert b"/Filter /DCTDecode" in doc.data
         # JPEG stream should start with JFIF SOI marker
@@ -122,11 +121,11 @@ class TestBuildPdfJpeg:
         assert soi_idx > 0
 
     def test_quality_affects_size(self):
-        page = _make_raw(100, 100, color_type=2)
+        page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_low = build_pdf(
             [page], dpi=300, image_format=ImageFormat.JPEG, jpeg_quality=10,
         )
-        page = _make_raw(100, 100, color_type=2)
+        page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_high = build_pdf(
             [page], dpi=300, image_format=ImageFormat.JPEG, jpeg_quality=95,
         )
@@ -134,7 +133,7 @@ class TestBuildPdfJpeg:
 
     def test_bw_mode_uses_grayscale_jpeg(self):
         """BW mode with JPEG uses 8-bit grayscale (JPEG can't do 1-bit)."""
-        page = _make_raw(16, 16, color_type=2)
+        page = _make_raw(16, 16, color_mode=ColorMode.COLOR)
         doc = build_pdf(
             [page], dpi=300, color_mode=ColorMode.BW,
             image_format=ImageFormat.JPEG,
@@ -179,7 +178,7 @@ class TestGrayToBw:
 
 class TestColorModeConversion:
     def test_gray_mode_converts_rgb(self):
-        page = _make_raw(4, 4, color_type=2)
+        page = _make_raw(4, 4, color_mode=ColorMode.COLOR)
         doc = build_pdf(
             [page], dpi=72, color_mode=ColorMode.GRAY,
             image_format=ImageFormat.PNG,
@@ -189,7 +188,7 @@ class TestColorModeConversion:
         assert b"/DeviceRGB" not in doc.data
 
     def test_bw_mode_converts_rgb(self):
-        page = _make_raw(8, 4, color_type=2)
+        page = _make_raw(8, 4, color_mode=ColorMode.COLOR)
         doc = build_pdf(
             [page], dpi=72, color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
@@ -198,7 +197,7 @@ class TestColorModeConversion:
         assert b"/BitsPerComponent 1" in doc.data
 
     def test_bw_mode_from_grayscale(self):
-        page = _make_raw(8, 4, color_type=0)
+        page = _make_raw(8, 4, color_mode=ColorMode.GRAY)
         doc = build_pdf(
             [page], dpi=72, color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
@@ -208,7 +207,7 @@ class TestColorModeConversion:
 
     def test_bw_mode_from_1bit(self):
         """1-bit input with BW mode passes through without re-conversion."""
-        page = _make_raw(8, 4, color_type=0, bit_depth=1)
+        page = _make_raw(8, 4, color_mode=ColorMode.BW)
         doc = build_pdf(
             [page], dpi=72, color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,
@@ -217,15 +216,15 @@ class TestColorModeConversion:
         assert b"/BitsPerComponent 1" in doc.data
 
     def test_color_mode_default_unchanged(self):
-        page = _make_raw(4, 4, color_type=2)
+        page = _make_raw(4, 4, color_mode=ColorMode.COLOR)
         doc = build_pdf([page], dpi=72, image_format=ImageFormat.PNG)
         assert b"/DeviceRGB" in doc.data
         assert b"/BitsPerComponent 8" in doc.data
 
     def test_bw_pdf_smaller_than_color(self):
-        page = _make_raw(100, 100, color_type=2)
+        page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_color = build_pdf([page], dpi=300, image_format=ImageFormat.PNG)
-        page = _make_raw(100, 100, color_type=2)
+        page = _make_raw(100, 100, color_mode=ColorMode.COLOR)
         doc_bw = build_pdf(
             [page], dpi=300, color_mode=ColorMode.BW,
             image_format=ImageFormat.PNG,

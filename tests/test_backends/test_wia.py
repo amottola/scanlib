@@ -1,3 +1,4 @@
+import sys
 from unittest import mock
 
 import pytest
@@ -9,6 +10,8 @@ from scanlib._types import (
     ScanOptions,
     ScanSource,
 )
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 
 # WIA property IDs used in tests
 _WIA_DIP_DEV_ID = 2

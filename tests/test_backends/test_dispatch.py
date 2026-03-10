@@ -8,6 +8,7 @@ import threading
 import pytest
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 class TestWiaDispatch:
     """Test WiaBackend._dispatch runs functions on the worker thread."""
 

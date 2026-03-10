@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from scanlib._jpeg import encode_jpeg
+from scanlib._types import ColorMode
 
 
 def _solid_gray(width: int, height: int, value: int = 128) -> bytes:
@@ -42,63 +43,63 @@ def _gradient_rgb(width: int, height: int) -> bytes:
 
 class TestJpegBasic:
     def test_grayscale_jfif_markers(self):
-        data = encode_jpeg(_solid_gray(8, 8), 8, 8, 0, 85)
+        data = encode_jpeg(_solid_gray(8, 8), 8, 8, ColorMode.GRAY, 85)
         assert data[:2] == b"\xff\xd8"  # SOI
         assert data[-2:] == b"\xff\xd9"  # EOI
 
     def test_rgb_jfif_markers(self):
-        data = encode_jpeg(_solid_rgb(8, 8), 8, 8, 2, 85)
+        data = encode_jpeg(_solid_rgb(8, 8), 8, 8, ColorMode.COLOR, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
     def test_grayscale_gradient(self):
-        data = encode_jpeg(_gradient_gray(32, 32), 32, 32, 0, 85)
+        data = encode_jpeg(_gradient_gray(32, 32), 32, 32, ColorMode.GRAY, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
         assert len(data) > 0
 
     def test_rgb_gradient(self):
-        data = encode_jpeg(_gradient_rgb(32, 32), 32, 32, 2, 85)
+        data = encode_jpeg(_gradient_rgb(32, 32), 32, 32, ColorMode.COLOR, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
     def test_1x1_grayscale(self):
-        data = encode_jpeg(b"\x80", 1, 1, 0, 85)
+        data = encode_jpeg(b"\x80", 1, 1, ColorMode.GRAY, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
     def test_1x1_rgb(self):
-        data = encode_jpeg(b"\xff\x00\x80", 1, 1, 2, 85)
+        data = encode_jpeg(b"\xff\x00\x80", 1, 1, ColorMode.COLOR, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
     def test_non_multiple_of_8(self):
-        data = encode_jpeg(_gradient_gray(13, 7), 13, 7, 0, 85)
+        data = encode_jpeg(_gradient_gray(13, 7), 13, 7, ColorMode.GRAY, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
     def test_non_multiple_of_16_rgb(self):
-        data = encode_jpeg(_gradient_rgb(13, 7), 13, 7, 2, 85)
+        data = encode_jpeg(_gradient_rgb(13, 7), 13, 7, ColorMode.COLOR, 85)
         assert data[:2] == b"\xff\xd8"
         assert data[-2:] == b"\xff\xd9"
 
     def test_encode_jpeg_callable(self):
         """Verify encode_jpeg is available on the current platform."""
-        data = encode_jpeg(_solid_gray(8, 8), 8, 8, 0, 85)
+        data = encode_jpeg(_solid_gray(8, 8), 8, 8, ColorMode.GRAY, 85)
         assert data[:2] == b"\xff\xd8"
 
 
 class TestJpegQuality:
     def test_quality_affects_size(self):
         pixels = _gradient_gray(64, 64)
-        low = encode_jpeg(pixels, 64, 64, 0, 10)
-        high = encode_jpeg(pixels, 64, 64, 0, 95)
+        low = encode_jpeg(pixels, 64, 64, ColorMode.GRAY, 10)
+        high = encode_jpeg(pixels, 64, 64, ColorMode.GRAY, 95)
         assert len(low) < len(high)
 
     def test_quality_bounds(self):
         pixels = _solid_gray(8, 8)
-        q1 = encode_jpeg(pixels, 8, 8, 0, 1)
-        q100 = encode_jpeg(pixels, 8, 8, 0, 100)
+        q1 = encode_jpeg(pixels, 8, 8, ColorMode.GRAY, 1)
+        q100 = encode_jpeg(pixels, 8, 8, ColorMode.GRAY, 100)
         assert q1[:2] == b"\xff\xd8"
         assert q100[:2] == b"\xff\xd8"
 
@@ -116,7 +117,7 @@ class TestJpegSof:
         raise ValueError("SOF0 not found")
 
     def test_grayscale_sof0(self):
-        data = encode_jpeg(_solid_gray(32, 24), 32, 24, 0, 85)
+        data = encode_jpeg(_solid_gray(32, 24), 32, 24, ColorMode.GRAY, 85)
         off = self._find_sof0(data)
         precision = data[off]
         h = (data[off + 1] << 8) | data[off + 2]
@@ -128,7 +129,7 @@ class TestJpegSof:
         assert ncomp == 1
 
     def test_rgb_sof0(self):
-        data = encode_jpeg(_solid_rgb(48, 32), 48, 32, 2, 85)
+        data = encode_jpeg(_solid_rgb(48, 32), 48, 32, ColorMode.COLOR, 85)
         off = self._find_sof0(data)
         precision = data[off]
         h = (data[off + 1] << 8) | data[off + 2]

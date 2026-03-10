@@ -655,19 +655,16 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
 
     if is_rgb and depth == 8:
         pixel_data = trim_rows(raw, height, params.bytes_per_line, width * 3)
-        color_type = 2
-        bit_depth = 8
+        mode = ColorMode.COLOR
 
     elif not is_rgb and depth == 8:
         pixel_data = trim_rows(raw, height, params.bytes_per_line, width)
-        color_type = 0
-        bit_depth = 8
+        mode = ColorMode.GRAY
 
     elif not is_rgb and depth == 1:
         row_bytes = (width + 7) // 8
         pixel_data = trim_rows(raw, height, params.bytes_per_line, row_bytes)
-        color_type = 0
-        bit_depth = 1
+        mode = ColorMode.BW
 
     else:
         raise ScanError(
@@ -676,7 +673,7 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
 
     return ScannedPage(
         data=pixel_data, width=width, height=height,
-        color_type=color_type, bit_depth=bit_depth,
+        color_mode=mode,
     )
 
 
