@@ -340,6 +340,15 @@ def _make_invoker_cls() -> type:
 _InvokerCls: type | None = None
 
 
+def _safe_str(dev, attr: str) -> str | None:
+    """Read an optional string attribute from an ObjC device object."""
+    try:
+        val = getattr(dev, attr)()
+        return str(val) if val else None
+    except Exception:
+        return None
+
+
 class MacOSBackend:
     """macOS scanning backend using ImageCaptureCore.
 
@@ -432,8 +441,8 @@ class MacOSBackend:
         return [
             Scanner(
                 name=dev.name(),
-                vendor=None,
-                model=dev.name(),
+                vendor=_safe_str(dev, "manufacturer"),
+                model=None,
                 backend="imagecapture",
             )
             for dev in delegate.scanners

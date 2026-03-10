@@ -832,11 +832,10 @@ class WiaBackend:
 
             dev_id = _read_prop(storage, _WIA_DIP_DEV_ID, "")
             name = _read_prop(storage, _WIA_DIP_DEV_NAME, "Unknown Scanner")
-            vendor = _read_prop(storage, _WIA_DIP_VEND_DESC)
 
             scanner = Scanner(
                 name=str(name),
-                vendor=str(vendor) if vendor else None,
+                vendor=None,
                 model=None,
                 backend="wia",
             )

@@ -95,7 +95,7 @@ class TestWiaBackend:
 
         assert len(scanners) == 2
         assert scanners[0].name == "Scanner A"
-        assert scanners[0].vendor == "Vendor A"
+        assert scanners[0].vendor is None
         assert scanners[0].backend == "wia"
         assert scanners[1].name == "Scanner B"
 
