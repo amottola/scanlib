@@ -100,8 +100,10 @@ class ScanOptions:
 class ScannedPage:
     """A single scanned page with raw pixel data.
 
-    *data* contains raw pixel bytes with no header or wrapper.
-    *color_type* follows PNG conventions: 0 = grayscale, 2 = RGB.
+    *data* contains raw pixel bytes with no header or wrapper —
+    1 byte per pixel for grayscale (*color_type* 0) or 3 bytes per
+    pixel (R, G, B) for color (*color_type* 2).  *color_type* follows
+    PNG conventions.
     """
 
     data: bytes
@@ -116,7 +118,12 @@ class ScannedPage:
         return ColorMode.GRAY if self.color_type == 0 else ColorMode.COLOR
 
     def to_jpeg(self, quality: int = 85) -> bytes:
-        """Encode the page as JPEG and return the bytes."""
+        """Encode the page as JPEG and return the bytes.
+
+        Uses a platform-native encoder (ImageIO on macOS, WIC on
+        Windows, libjpeg-turbo on Linux).  *quality* ranges from
+        1 (smallest) to 100 (best).
+        """
         from ._jpeg import encode_jpeg
 
         return encode_jpeg(
@@ -124,7 +131,10 @@ class ScannedPage:
         )
 
     def to_png(self) -> bytes:
-        """Encode the page as PNG and return the bytes."""
+        """Encode the page as lossless PNG and return the bytes.
+
+        Uses stdlib ``zlib`` for compression — no external dependency.
+        """
         w, h = self.width, self.height
         ct, bd = self.color_type, self.bit_depth
 
@@ -426,6 +436,11 @@ def build_pdf(
     *pages* is any iterable of :class:`ScannedPage` objects — they may
     come directly from :meth:`Scanner.scan_pages` or from a list that
     has been reordered, filtered, etc.
+
+    *image_format* selects the encoding for page images inside the PDF:
+    :attr:`ImageFormat.JPEG` (default, smaller files) or
+    :attr:`ImageFormat.PNG` (lossless).  *jpeg_quality* (1–100) controls
+    JPEG compression; it is ignored when *image_format* is PNG.
 
     Returns a :class:`ScannedDocument` containing the PDF bytes.
     """

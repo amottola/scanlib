@@ -4,10 +4,13 @@ scanlib
 A multiplatform document scanning library for Python.
 
 scanlib provides a unified API for document scanning across Linux (SANE),
-macOS (ImageCaptureCore), and Windows (WIA). It returns scanned documents
-as PDF files and handles platform differences transparently. JPEG encoding
-and pixel conversion are handled by a bundled C++ extension, with optional
-`libjpeg-turbo <https://libjpeg-turbo.org/>`_ acceleration for high-resolution scans.
+macOS (ImageCaptureCore), and Windows (WIA 2.0). It returns scanned
+documents as PDF files and handles platform differences transparently.
+Scanned pages can be encoded as JPEG or lossless PNG. JPEG encoding uses
+platform-native encoders (ImageIO on macOS, WIC on Windows,
+`libjpeg-turbo <https://libjpeg-turbo.org/>`_ on Linux), PNG encoding
+uses stdlib ``zlib``, pixel conversion is handled by a bundled C++
+extension, and PDF assembly uses only the standard library.
 
 Requirements & Installation
 --------------------------
@@ -25,12 +28,13 @@ Platform backends and their Python bindings are installed automatically by pip:
 - **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes.
   Requires ``libsane`` (``apt install libsane-dev`` / ``dnf install sane-backends``).
 - **macOS 10.7+** — ImageCaptureCore via pyobjc.
-- **Windows 10+** — WIA via `comtypes <https://github.com/enthought/comtypes>`_.
+- **Windows 10+** — WIA 2.0 via `comtypes <https://github.com/enthought/comtypes>`_.
+- **Linux** also requires `libjpeg-turbo <https://libjpeg-turbo.org/>`_
+  for JPEG encoding (``apt install libturbojpeg0-dev``).
 
-On macOS, JPEG encoding uses the built-in ImageIO framework automatically.
-On Linux and Windows, install `libjpeg-turbo <https://libjpeg-turbo.org/>`_
-for faster JPEG encoding (``apt install libturbojpeg0-dev`` on Linux).
-It is detected automatically at runtime.
+Page encoding supports JPEG (platform-native: ImageIO on macOS, WIC on
+Windows, libjpeg-turbo on Linux) and lossless PNG (stdlib ``zlib``, no
+external dependency).
 
 Basic Usage
 -----------

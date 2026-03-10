@@ -75,7 +75,7 @@ Properties like `sources`, `resolutions`, `color_modes` raise `ScannerNotOpenErr
 
 ### ScannedPage and build_pdf
 
-Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper). Each `ScannedPage` has `to_jpeg(quality)` and `to_png()` methods for encoding, and a `color_mode` property. The public `build_pdf()` function in `_types.py` consumes an iterable of `ScannedPage` objects, applies color mode conversion if needed (using `rgb_to_gray`/`gray_to_bw` from `_scanlib_accel`), encodes each page as JPEG or PNG, and writes a minimal PDF 1.4 file. The streaming design means only one page's raw pixels live in memory at a time.
+Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper). Pixels are 3 bytes per pixel for RGB (color_type 2) and 1 byte per pixel for grayscale (color_type 0). Each `ScannedPage` has `to_jpeg(quality)` and `to_png()` methods for encoding, and a `color_mode` property. The public `build_pdf()` function in `_types.py` consumes an iterable of `ScannedPage` objects, applies color mode conversion if needed (using `rgb_to_gray`/`gray_to_bw` from `_scanlib_accel`), encodes each page as JPEG or PNG, and writes a minimal PDF 1.4 file. The streaming design means only one page's raw pixels live in memory at a time.
 
 `scanner.scan()` is a convenience that calls `scan_pages()` + `build_pdf()` internally. For page preview/rearrangement workflows, call `scan_pages()` directly, then `build_pdf()` after reordering.
 
