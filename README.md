@@ -6,7 +6,7 @@
 
 A multiplatform document scanning library for Python.
 
-scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. JPEG encoding uses platform-native encoders (ImageIO on macOS, WIC on Windows, [libjpeg-turbo](https://libjpeg-turbo.org/) on Linux), pixel conversion is handled by a bundled C extension, and PDF assembly uses only the standard library.
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. Scanned pages can be encoded as JPEG or lossless PNG, and assembled into multi-page PDFs. JPEG encoding uses platform-native encoders (ImageIO on macOS, WIC on Windows, [libjpeg-turbo](https://libjpeg-turbo.org/) on Linux), PNG encoding uses stdlib `zlib`, pixel conversion is handled by a bundled C extension, and PDF assembly uses only the standard library.
 
 ## Requirements & Installation
 
@@ -24,7 +24,7 @@ Platform backends and their Python bindings are installed automatically by pip:
 | **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
 | **Windows 10+** | WIA ([comtypes](https://github.com/enthought/comtypes)) | `comtypes` (auto) | *none* |
 
-JPEG encoding uses platform-native encoders automatically: ImageIO on macOS, WIC on Windows, and libjpeg-turbo on Linux.
+Page encoding supports JPEG (platform-native: ImageIO on macOS, WIC on Windows, libjpeg-turbo on Linux) and lossless PNG (stdlib `zlib`, no external dependency).
 
 ## Quick Start
 

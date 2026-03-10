@@ -41,7 +41,7 @@ A required CPython C++ extension provides pixel conversion and BMP parsing:
 
 The extension is built from `src/accel/_scanlib_accel.cpp`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
 
-### JPEG encoding (`_jpeg.py`)
+### Page encoding (`_jpeg.py` and `_types.py`)
 
 `_jpeg.py` provides a unified `encode_jpeg()` using platform-native encoders with no fallback chain:
 
@@ -50,6 +50,8 @@ The extension is built from `src/accel/_scanlib_accel.cpp`. Build configuration 
 - **Linux**: libjpeg-turbo (required at runtime, via ctypes to `libturbojpeg`)
 
 The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` directly for each platform — no dispatch function or boolean flags.
+
+PNG encoding is handled in `build_pdf()` (`_types.py`) using stdlib `zlib` for deflate compression — no external dependency. Each `ScannedPage` exposes both `to_jpeg(quality)` and `to_png()` methods. `build_pdf()` uses JPEG (DCTDecode) by default and PNG (FlateDecode) when `fmt="png"` is specified.
 
 ### Backend selection and thread dispatch
 
@@ -114,5 +116,5 @@ The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- JPEG encoding goes through `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg-turbo on Linux); pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`) using stdlib `zlib` for the PNG path
+- Page encoding supports JPEG via `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg-turbo on Linux) and lossless PNG via stdlib `zlib`; pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`)
 - `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, `build_pdf()`, and shared utilities (`check_progress`, `MM_PER_INCH`)
