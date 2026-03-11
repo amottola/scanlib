@@ -828,9 +828,7 @@ class SaneBackend:
             is_escl = dev_info[0].startswith(("escl:", "airscan:"))
             if is_escl:
                 model = (dev_info[2] or "").strip().lower()
-                if model and any(
-                    s in model or model in s for s in seen_escl_models
-                ):
+                if model and any(s in model or model in s for s in seen_escl_models):
                     continue
                 if model:
                     seen_escl_models.append(model)
