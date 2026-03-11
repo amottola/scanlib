@@ -480,6 +480,9 @@ else:
 
     def _load_libjpeg() -> tuple[ctypes.CDLL, int, int]:
         """Load libjpeg and return (lib, version, struct_size)."""
+        import subprocess
+        import textwrap
+
         path = ctypes.util.find_library("jpeg")
         if not path:
             raise RuntimeError(
@@ -516,28 +519,52 @@ else:
             ctypes.POINTER(ctypes.c_ulong),
         ]
 
-        # Probe the library version and struct size.  jpeg_CreateCompress
-        # checks both at runtime and raises on mismatch, so we try known
-        # combinations until one succeeds.
-        jerr = (ctypes.c_ubyte * _JERR_SIZE)()
-        lib.jpeg_std_error(ctypes.cast(jerr, ctypes.c_void_p))
+        # Probe the library version and struct size in a subprocess.
+        # libjpeg's default error handler calls exit() on version/size
+        # mismatch, which kills the process.  Each (version, size) pair
+        # is tested in its own subprocess to isolate from that.
+        _PROBE = (
+            "import ctypes,sys;"
+            "l=ctypes.CDLL({path!r});"
+            "l.jpeg_std_error.restype=ctypes.c_void_p;"
+            "l.jpeg_std_error.argtypes=[ctypes.c_void_p];"
+            "l.jpeg_CreateCompress.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_size_t];"
+            "l.jpeg_destroy_compress.argtypes=[ctypes.c_void_p];"
+            "P=ctypes.sizeof(ctypes.c_void_p);"
+            "e=(ctypes.c_ubyte*1024)();"
+            "l.jpeg_std_error(ctypes.cast(e,ctypes.c_void_p));"
+            "c=(ctypes.c_ubyte*{{sz}})();"
+            "ctypes.memmove(c,ctypes.byref(ctypes.c_void_p(ctypes.addressof(e))),P);"
+            "l.jpeg_CreateCompress(ctypes.cast(c,ctypes.c_void_p),{{ver}},{{sz}});"
+            "l.jpeg_destroy_compress(ctypes.cast(c,ctypes.c_void_p));"
+            "print('OK')"
+        ).format(path=path)
 
-        for ver in (80, 62, 70, 90):
-            for sz in (584, 576, 560, 552, 600, 592, 568):
-                try:
-                    cinfo = (ctypes.c_ubyte * sz)()
-                    ctypes.memmove(
-                        cinfo,
-                        ctypes.byref(ctypes.c_void_p(ctypes.addressof(jerr))),
-                        _PTR,
-                    )
-                    lib.jpeg_CreateCompress(
-                        ctypes.cast(cinfo, ctypes.c_void_p), ver, sz
-                    )
-                    lib.jpeg_destroy_compress(ctypes.cast(cinfo, ctypes.c_void_p))
+        # Most-likely combos first: libjpeg-turbo 64-bit, IJG 6b 64-bit,
+        # then 32-bit variants, then less common versions.
+        _COMBOS = [
+            (80, 584),
+            (62, 520),
+            (80, 560),
+            (62, 464),
+            (90, 600),
+            (90, 592),
+            (70, 568),
+            (70, 560),
+        ]
+        for ver, sz in _COMBOS:
+            script = _PROBE.format(ver=ver, sz=sz)
+            try:
+                r = subprocess.run(
+                    [sys.executable, "-c", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if r.returncode == 0 and "OK" in r.stdout:
                     return lib, ver, sz
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
         raise RuntimeError("Could not determine libjpeg struct layout")
 
