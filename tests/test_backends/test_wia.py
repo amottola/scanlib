@@ -142,8 +142,9 @@ class TestWiaBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert ScanSource.FLATBED in scanners[0]._sources
-        assert ScanSource.FEEDER in scanners[0]._sources
+        source_types = [si.type for si in scanners[0]._sources]
+        assert ScanSource.FLATBED in source_types
+        assert ScanSource.FEEDER in source_types
 
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
@@ -160,12 +161,12 @@ class TestWiaBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        areas = scanners[0]._max_scan_areas
-        assert ScanSource.FLATBED in areas
-        assert areas[ScanSource.FLATBED].x == 0
-        assert areas[ScanSource.FLATBED].y == 0
-        assert areas[ScanSource.FLATBED].width == 2159
-        assert areas[ScanSource.FLATBED].height == 2970
+        si = next(s for s in scanners[0]._sources if s.type == ScanSource.FLATBED)
+        assert si.max_scan_area is not None
+        assert si.max_scan_area.x == 0
+        assert si.max_scan_area.y == 0
+        assert si.max_scan_area.width == 2159
+        assert si.max_scan_area.height == 2970
 
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(f"{_WIA_MODULE}._read_wia_color_modes", return_value=[ColorMode.COLOR])
@@ -179,7 +180,8 @@ class TestWiaBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert scanners[0]._resolutions == [150, 300, 600]
+        si = scanners[0]._sources[0]
+        assert si.resolutions == [150, 300, 600]
 
     @mock.patch(f"{_WIA_MODULE}._read_wia_defaults", return_value=None)
     @mock.patch(
@@ -196,9 +198,10 @@ class TestWiaBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert ColorMode.BW in scanners[0]._color_modes
-        assert ColorMode.GRAY in scanners[0]._color_modes
-        assert ColorMode.COLOR in scanners[0]._color_modes
+        si = scanners[0]._sources[0]
+        assert ColorMode.BW in si.color_modes
+        assert ColorMode.GRAY in si.color_modes
+        assert ColorMode.COLOR in si.color_modes
 
     @mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=_read_prop_from_mock)
     def test_scan_pages_not_open_raises(self, _mock_rp):
