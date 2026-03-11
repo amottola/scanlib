@@ -728,6 +728,10 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
                     last_pct = pct
         if st == _STATUS_EOF:
             break
+        if st == _STATUS_IO_ERROR and chunks:
+            # Some backends (e.g. hpaio) signal end-of-page with IO_ERROR
+            # instead of EOF once all data has been delivered.
+            break
         if st != _STATUS_GOOD:
             name = _STATUS_NAMES.get(st, f"unknown ({st})")
             raise ScanError(f"sane_read: {name}")
