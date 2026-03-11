@@ -380,6 +380,8 @@ class Scanner:
             raise ScannerNotOpenError("Scanner must be opened before scanning")
         # Find the matching SourceInfo for validation.
         source_types = [si.type for si in self._sources]
+        if source is None and self._defaults and self._defaults.source is not None:
+            source = self._defaults.source
         if source is not None and self._sources and source not in source_types:
             raise ValueError(
                 f"Unsupported source {source.value!r}; "

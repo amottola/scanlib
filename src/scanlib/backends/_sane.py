@@ -264,21 +264,25 @@ def _get_devices() -> list[tuple[str, str, str, str]]:
 
 _LIBUSB_RE = re.compile(r"libusb:(\d+:\d+)")
 _HPAIO_SERIAL_RE = re.compile(r"hpaio:/usb/.*\?serial=(\S+)")
+_IP_RE = re.compile(r"(?:\?ip=|://)((?:\d{1,3}\.){3}\d{1,3})\b")
 
 
-def _extract_usb_id(device_name: str) -> str | None:
-    """Extract a USB bus:device identifier from a SANE device name.
+def _extract_device_id(device_name: str) -> str | None:
+    """Extract an identifier for deduplicating SANE devices.
 
-    Returns a canonical "BUS:DEV" string when possible, or None for
-    network/non-USB devices.  Handles two common patterns:
+    Returns a canonical string when possible, or None when the device
+    cannot be matched.  Handles USB and network patterns:
 
-    - ``backend:libusb:BUS:DEV`` — used by most SANE USB backends
-    - ``hpaio:/usb/MODEL?serial=SN`` — HP's HPLIP backend; the serial
-      is resolved to bus:dev via sysfs
+    - ``backend:libusb:BUS:DEV`` — USB id from most SANE backends
+    - ``hpaio:/usb/MODEL?serial=SN`` — HP HPLIP USB; serial resolved
+      to bus:dev via sysfs
+    - ``hpaio:/net/MODEL?ip=ADDR``, ``escl://ADDR:PORT/...``,
+      ``airscan:... http://ADDR:PORT/...`` — network scanners; the
+      IP address is used as the dedup key
     """
     m = _LIBUSB_RE.search(device_name)
     if m:
-        return m.group(1)
+        return f"usb:{m.group(1)}"
 
     m = _HPAIO_SERIAL_RE.match(device_name)
     if m:
@@ -291,9 +295,13 @@ def _extract_usb_id(device_name: str) -> str | None:
                 if serial_file.exists() and serial_file.read_text().strip() == serial:
                     busnum = (dev_dir / "busnum").read_text().strip()
                     devnum = (dev_dir / "devnum").read_text().strip()
-                    return f"{int(busnum):03d}:{int(devnum):03d}"
+                    return f"usb:{int(busnum):03d}:{int(devnum):03d}"
         except (OSError, ValueError):
             pass
+
+    m = _IP_RE.search(device_name)
+    if m:
+        return f"ip:{m.group(1)}"
 
     return None
 
@@ -801,19 +809,31 @@ class SaneBackend:
             return []
         if error is not None:
             raise error
-        # Deduplicate by USB bus:device — multiple SANE backends
-        # may claim the same physical device.  The first entry is
-        # kept (SANE lists the most capable/reliable backend first).
+        # Deduplicate — multiple SANE backends may claim the same
+        # physical device (USB bus:dev or network IP).  The first
+        # entry is kept (SANE lists the most capable backend first).
+        # For eSCL backends (escl: and airscan:) that lack an IP in
+        # the device name, fall back to model-name matching.
         scanners: list[Scanner] = []
-        seen_usb: set[str] = set()
+        seen: set[str] = set()
+        seen_escl_models: list[str] = []
         for dev_info in result or []:
             if dev_info[0].startswith("v4l:"):
                 continue
-            usb_id = _extract_usb_id(dev_info[0])
-            if usb_id:
-                if usb_id in seen_usb:
+            dev_id = _extract_device_id(dev_info[0])
+            if dev_id:
+                if dev_id in seen:
                     continue
-                seen_usb.add(usb_id)
+                seen.add(dev_id)
+            is_escl = dev_info[0].startswith(("escl:", "airscan:"))
+            if is_escl:
+                model = (dev_info[2] or "").strip().lower()
+                if model and any(
+                    s in model or model in s for s in seen_escl_models
+                ):
+                    continue
+                if model:
+                    seen_escl_models.append(model)
             scanners.append(
                 Scanner(
                     name=dev_info[0],
@@ -956,10 +976,11 @@ class SaneBackend:
 
             check_progress(options.progress, 100)
         except ScanAborted:
-            if scan_started:
-                dev.cancel()
             raise
         except ScanError:
             raise
         except Exception as exc:
             raise ScanError(f"Scan failed: {exc}") from exc
+        finally:
+            if scan_started:
+                dev.cancel()
