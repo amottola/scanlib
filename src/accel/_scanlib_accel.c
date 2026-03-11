@@ -12,6 +12,11 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef HAVE_JPEGLIB
+#include <setjmp.h>
+#include <jpeglib.h>
+#endif
+
 /* ------------------------------------------------------------------ */
 /* rgb_to_gray                                                        */
 /* ------------------------------------------------------------------ */
@@ -643,6 +648,102 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
 }
 
 /* ------------------------------------------------------------------ */
+/* encode_jpeg (Linux only, requires libjpeg)                         */
+/* ------------------------------------------------------------------ */
+
+#ifdef HAVE_JPEGLIB
+
+struct my_error_mgr {
+    struct jpeg_error_mgr pub;
+    jmp_buf setjmp_buffer;
+};
+
+static void my_error_exit(j_common_ptr cinfo) {
+    struct my_error_mgr *myerr = (struct my_error_mgr *)cinfo->err;
+    longjmp(myerr->setjmp_buffer, 1);
+}
+
+static PyObject *py_encode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
+    Py_buffer data;
+    int width, height, num_components, quality;
+
+    if (!PyArg_ParseTuple(args, "y*iiii", &data, &width, &height,
+                          &num_components, &quality))
+        return NULL;
+
+    if (width <= 0 || height <= 0) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "invalid dimensions");
+        return NULL;
+    }
+    if (num_components != 1 && num_components != 3) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError,
+                        "num_components must be 1 or 3");
+        return NULL;
+    }
+
+    Py_ssize_t expected = (Py_ssize_t)width * height * num_components;
+    if (data.len < expected) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
+        return NULL;
+    }
+
+    struct jpeg_compress_struct cinfo;
+    struct my_error_mgr jerr;
+    unsigned char *outbuf = NULL;
+    unsigned long outsize = 0;
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = my_error_exit;
+
+    if (setjmp(jerr.setjmp_buffer)) {
+        jpeg_destroy_compress(&cinfo);
+        free(outbuf);
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_RuntimeError, "libjpeg encoding error");
+        return NULL;
+    }
+
+    jpeg_create_compress(&cinfo);
+    jpeg_mem_dest(&cinfo, &outbuf, &outsize);
+
+    cinfo.image_width = (JDIMENSION)width;
+    cinfo.image_height = (JDIMENSION)height;
+    cinfo.input_components = num_components;
+    cinfo.in_color_space = (num_components == 3) ? JCS_RGB : JCS_GRAYSCALE;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    const unsigned char *src = (const unsigned char *)data.buf;
+    int row_stride = width * num_components;
+
+    Py_BEGIN_ALLOW_THREADS
+    while (cinfo.next_scanline < cinfo.image_height) {
+        const unsigned char *row =
+            src + (Py_ssize_t)cinfo.next_scanline * row_stride;
+        JSAMPROW row_ptr = (JSAMPROW)row;
+        jpeg_write_scanlines(&cinfo, &row_ptr, 1);
+    }
+    Py_END_ALLOW_THREADS
+
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    PyObject *result = PyBytes_FromStringAndSize(
+        (const char *)outbuf, (Py_ssize_t)outsize);
+    free(outbuf);
+
+    PyBuffer_Release(&data);
+    return result;
+}
+
+#endif /* HAVE_JPEGLIB */
+
+/* ------------------------------------------------------------------ */
 /* Module definition                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -673,6 +774,11 @@ static PyMethodDef methods[] = {
      "rotate_pixels(data, width, height, bpp, degrees) -> bytes\n"
      "Rotate raw pixels clockwise by 90, 180, or 270 degrees.\n"
      "bpp is bytes per pixel (0 for 1-bit packed, 1 for gray, 3 for RGB)."},
+#ifdef HAVE_JPEGLIB
+    {"encode_jpeg", py_encode_jpeg, METH_VARARGS,
+     "encode_jpeg(data, width, height, num_components, quality) -> bytes\n"
+     "Encode raw pixels to JPEG using libjpeg."},
+#endif
     {NULL, NULL, 0, NULL}
 };
 

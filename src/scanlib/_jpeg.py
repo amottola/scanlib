@@ -463,112 +463,10 @@ elif sys.platform == "win32":
 
 else:
     # ------------------------------------------------------------------ #
-    # Linux libjpeg encoder (standard IJG API via ctypes)                 #
+    # Linux libjpeg encoder (compiled into _scanlib_accel C extension)    #
     # ------------------------------------------------------------------ #
 
-    import struct as _struct
-
-    _JCS_GRAYSCALE = 1
-    _JCS_RGB = 2
-    _JERR_SIZE = 1024
-    _PTR = ctypes.sizeof(ctypes.c_void_p)
-
-    # Offset of image_width in jpeg_compress_struct (stable since 6b):
-    # 4 pointers (err, mem, progress, client_data) + 2 ints
-    # (is_decompressor, global_state) + 1 pointer (dest)
-    _IMG_W_OFF = 5 * _PTR + 8
-
-    def _load_libjpeg() -> tuple[ctypes.CDLL, int, int]:
-        """Load libjpeg and return (lib, version, struct_size)."""
-        import subprocess
-        import textwrap
-
-        path = ctypes.util.find_library("jpeg")
-        if not path:
-            raise RuntimeError(
-                "libjpeg is required on Linux but was not found. "
-                "Install it with: apt install libjpeg-dev"
-            )
-        lib = ctypes.CDLL(path)
-
-        lib.jpeg_std_error.restype = ctypes.c_void_p
-        lib.jpeg_std_error.argtypes = [ctypes.c_void_p]
-        lib.jpeg_CreateCompress.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_int,
-            ctypes.c_size_t,
-        ]
-        lib.jpeg_set_defaults.argtypes = [ctypes.c_void_p]
-        lib.jpeg_set_quality.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_int,
-            ctypes.c_int,
-        ]
-        lib.jpeg_start_compress.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        lib.jpeg_write_scanlines.restype = ctypes.c_uint
-        lib.jpeg_write_scanlines.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
-            ctypes.c_uint,
-        ]
-        lib.jpeg_finish_compress.argtypes = [ctypes.c_void_p]
-        lib.jpeg_destroy_compress.argtypes = [ctypes.c_void_p]
-        lib.jpeg_mem_dest.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
-            ctypes.POINTER(ctypes.c_ulong),
-        ]
-
-        # Probe the library version and struct size in a subprocess.
-        # libjpeg's default error handler calls exit() on version/size
-        # mismatch, which kills the process.  Each (version, size) pair
-        # is tested in its own subprocess to isolate from that.
-        _PROBE = (
-            "import ctypes,sys;"
-            "l=ctypes.CDLL({path!r});"
-            "l.jpeg_std_error.restype=ctypes.c_void_p;"
-            "l.jpeg_std_error.argtypes=[ctypes.c_void_p];"
-            "l.jpeg_CreateCompress.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_size_t];"
-            "l.jpeg_destroy_compress.argtypes=[ctypes.c_void_p];"
-            "P=ctypes.sizeof(ctypes.c_void_p);"
-            "e=(ctypes.c_ubyte*1024)();"
-            "l.jpeg_std_error(ctypes.cast(e,ctypes.c_void_p));"
-            "c=(ctypes.c_ubyte*{{sz}})();"
-            "ctypes.memmove(c,ctypes.byref(ctypes.c_void_p(ctypes.addressof(e))),P);"
-            "l.jpeg_CreateCompress(ctypes.cast(c,ctypes.c_void_p),{{ver}},{{sz}});"
-            "l.jpeg_destroy_compress(ctypes.cast(c,ctypes.c_void_p));"
-            "print('OK')"
-        ).format(path=path)
-
-        # Most-likely combos first: libjpeg-turbo 64-bit, IJG 6b 64-bit,
-        # then 32-bit variants, then less common versions.
-        _COMBOS = [
-            (80, 584),
-            (62, 520),
-            (80, 560),
-            (62, 464),
-            (90, 600),
-            (90, 592),
-            (70, 568),
-            (70, 560),
-        ]
-        for ver, sz in _COMBOS:
-            script = _PROBE.format(ver=ver, sz=sz)
-            try:
-                r = subprocess.run(
-                    [sys.executable, "-c", script],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if r.returncode == 0 and "OK" in r.stdout:
-                    return lib, ver, sz
-            except Exception:
-                continue
-
-        raise RuntimeError("Could not determine libjpeg struct layout")
-
-    _jpeg, _JPEG_LIB_VERSION, _CINFO_SIZE = _load_libjpeg()
+    from _scanlib_accel import encode_jpeg as _c_encode_jpeg
 
     def encode_jpeg(
         pixels: bytes,
@@ -578,52 +476,5 @@ else:
         quality: int,
     ) -> bytes:
         """Encode raw pixels as baseline JPEG using libjpeg."""
-        if color_mode == ColorMode.COLOR:
-            components, color_space = 3, _JCS_RGB
-        else:
-            components, color_space = 1, _JCS_GRAYSCALE
-
-        row_stride = width * components
-        cinfo = (ctypes.c_ubyte * _CINFO_SIZE)()
-        jerr = (ctypes.c_ubyte * _JERR_SIZE)()
-
-        _jpeg.jpeg_std_error(ctypes.cast(jerr, ctypes.c_void_p))
-        ctypes.memmove(
-            cinfo,
-            ctypes.byref(ctypes.c_void_p(ctypes.addressof(jerr))),
-            _PTR,
-        )
-
-        cinfo_ptr = ctypes.cast(cinfo, ctypes.c_void_p)
-        _jpeg.jpeg_CreateCompress(cinfo_ptr, _JPEG_LIB_VERSION, _CINFO_SIZE)
-
-        try:
-            out_buf = ctypes.POINTER(ctypes.c_ubyte)()
-            out_size = ctypes.c_ulong(0)
-            _jpeg.jpeg_mem_dest(
-                cinfo_ptr, ctypes.byref(out_buf), ctypes.byref(out_size)
-            )
-
-            # Set image_width, image_height, input_components, in_color_space
-            _struct.pack_into(
-                "IIiI", cinfo, _IMG_W_OFF, width, height, components, color_space
-            )
-
-            _jpeg.jpeg_set_defaults(cinfo_ptr)
-            _jpeg.jpeg_set_quality(cinfo_ptr, quality, 1)
-            _jpeg.jpeg_start_compress(cinfo_ptr, 1)
-
-            src = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
-            row_arr = (ctypes.POINTER(ctypes.c_ubyte) * 1)()
-
-            for y in range(height):
-                row_arr[0] = ctypes.cast(
-                    ctypes.addressof(src) + y * row_stride,
-                    ctypes.POINTER(ctypes.c_ubyte),
-                )
-                _jpeg.jpeg_write_scanlines(cinfo_ptr, row_arr, 1)
-
-            _jpeg.jpeg_finish_compress(cinfo_ptr)
-            return ctypes.string_at(out_buf, out_size.value)
-        finally:
-            _jpeg.jpeg_destroy_compress(cinfo_ptr)
+        components = 3 if color_mode == ColorMode.COLOR else 1
+        return _c_encode_jpeg(pixels, width, height, components, quality)

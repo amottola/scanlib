@@ -37,6 +37,9 @@ enable = ["cpython-freethreading"]
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
+before-build = [
+    "yum install -y libjpeg-turbo-devel 2>/dev/null || apk add libjpeg-turbo-dev 2>/dev/null || true",
+]
 before-test = [
     "yum install -y libjpeg-turbo-devel 2>/dev/null || apk add libjpeg-turbo-dev 2>/dev/null || true",
 ]
