@@ -65,12 +65,17 @@ After opening a scanner you can query its capabilities:
 
 ```python
 with scanners[0] as scanner:
-    print(scanner.sources)        # [ScanSource.FLATBED, ScanSource.FEEDER]
-    print(scanner.resolutions)    # [150, 300, 600, 1200]
-    print(scanner.color_modes)    # [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
-    print(scanner.max_scan_area)  # {ScanSource.FLATBED: ScanArea(x=0, y=0, width=2159, height=2972)}
-    print(scanner.defaults)       # ScannerDefaults(dpi=300, ...)
+    for si in scanner.sources:
+        print(si.type)           # ScanSource.FLATBED
+        print(si.resolutions)    # [150, 300, 600, 1200]
+        print(si.color_modes)    # [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
+        print(si.max_scan_area)  # ScanArea(x=0, y=0, width=2159, height=2972)
+    print(scanner.defaults)      # ScannerDefaults(dpi=300, ...)
 ```
+
+The first entry in `sources` is the scanner's primary source (typically
+flatbed). When `scan()` is called without an explicit `source`, the first
+entry is used for parameter validation.
 
 ## Feeder Scanning
 

@@ -90,6 +90,21 @@ class ScannerDefaults:
 
 
 @dataclass(frozen=True)
+class SourceInfo:
+    """Capabilities of a single scan source.
+
+    Each :class:`SourceInfo` bundles the supported resolutions, color
+    modes, and maximum scan area for one scan source (flatbed or feeder).
+    Access via :attr:`Scanner.sources` after opening the device.
+    """
+
+    type: ScanSource
+    resolutions: list[int]
+    color_modes: list[ColorMode]
+    max_scan_area: ScanArea | None
+
+
+@dataclass(frozen=True)
 class ScanOptions:
     """Options for a scan operation."""
 
@@ -256,10 +271,7 @@ class Scanner:
         self._model = model
         self._backend = backend
         self._backend_impl = _backend_impl
-        self._sources: list[ScanSource] = []
-        self._max_scan_areas: dict[ScanSource, ScanArea] = {}
-        self._resolutions: list[int] = []
-        self._color_modes: list[ColorMode] = []
+        self._sources: list[SourceInfo] = []
         self._defaults: ScannerDefaults | None = None
         self._is_open = False
 
@@ -293,8 +305,18 @@ class Scanner:
         return self._is_open
 
     @property
-    def sources(self) -> list[ScanSource]:
-        """Available scan sources. Only populated after :meth:`open`."""
+    def sources(self) -> list[SourceInfo]:
+        """Available scan sources and their capabilities.
+
+        Each entry is a :class:`SourceInfo` with ``type``,
+        ``resolutions``, ``color_modes``, and ``max_scan_area``.
+        Only populated after :meth:`open`.
+
+        The first entry is the scanner's primary source (typically
+        flatbed).  When :meth:`scan` or :meth:`scan_pages` is called
+        without an explicit *source*, the first entry is used for
+        parameter validation.
+        """
         if not self._is_open:
             raise ScannerNotOpenError("Scanner must be opened before querying sources")
         return self._sources
@@ -309,39 +331,6 @@ class Scanner:
         if not self._is_open:
             raise ScannerNotOpenError("Scanner must be opened before querying defaults")
         return self._defaults
-
-    @property
-    def max_scan_area(self) -> dict[ScanSource, ScanArea]:
-        """Maximum scan area per source as a :class:`ScanArea` (1/10 mm).
-
-        Returns a dict mapping each :class:`ScanSource` to a
-        :class:`ScanArea` with ``x=0, y=0`` and the physical maximum
-        width and height.  The dict may be empty if the backend could
-        not determine sizes.  Only available after :meth:`open`.
-        """
-        if not self._is_open:
-            raise ScannerNotOpenError(
-                "Scanner must be opened before querying max scan area"
-            )
-        return self._max_scan_areas
-
-    @property
-    def resolutions(self) -> list[int]:
-        """Supported DPI values. Only populated after :meth:`open`."""
-        if not self._is_open:
-            raise ScannerNotOpenError(
-                "Scanner must be opened before querying resolutions"
-            )
-        return self._resolutions
-
-    @property
-    def color_modes(self) -> list[ColorMode]:
-        """Supported color modes. Only populated after :meth:`open`."""
-        if not self._is_open:
-            raise ScannerNotOpenError(
-                "Scanner must be opened before querying color modes"
-            )
-        return self._color_modes
 
     # --- Session management ---
 
@@ -390,28 +379,33 @@ class Scanner:
         """
         if not self._is_open:
             raise ScannerNotOpenError("Scanner must be opened before scanning")
-        if self._resolutions and dpi not in self._resolutions:
-            raise ValueError(
-                f"Unsupported DPI {dpi}; scanner supports {self._resolutions}"
-            )
-        if self._color_modes and color_mode not in self._color_modes:
-            raise ValueError(
-                f"Unsupported color mode {color_mode.value!r}; "
-                f"scanner supports {[m.value for m in self._color_modes]}"
-            )
-        if source is not None and self._sources and source not in self._sources:
+        # Find the matching SourceInfo for validation.
+        source_types = [si.type for si in self._sources]
+        if source is not None and self._sources and source not in source_types:
             raise ValueError(
                 f"Unsupported source {source.value!r}; "
-                f"scanner supports {[s.value for s in self._sources]}"
+                f"scanner supports {[s.value for s in source_types]}"
             )
-        if scan_area is not None and self._max_scan_areas:
-            resolved = (
-                source
-                if source is not None
-                else (self._sources[0] if self._sources else None)
-            )
-            if resolved is not None and resolved in self._max_scan_areas:
-                max_area = self._max_scan_areas[resolved]
+        resolved: SourceInfo | None = None
+        if self._sources:
+            if source is not None:
+                resolved = next((si for si in self._sources if si.type == source), None)
+            else:
+                resolved = self._sources[0]
+        if resolved is not None:
+            if resolved.resolutions and dpi not in resolved.resolutions:
+                raise ValueError(
+                    f"Unsupported DPI {dpi}; source {resolved.type.value!r} "
+                    f"supports {resolved.resolutions}"
+                )
+            if resolved.color_modes and color_mode not in resolved.color_modes:
+                raise ValueError(
+                    f"Unsupported color mode {color_mode.value!r}; "
+                    f"source {resolved.type.value!r} supports "
+                    f"{[m.value for m in resolved.color_modes]}"
+                )
+            if scan_area is not None and resolved.max_scan_area is not None:
+                max_area = resolved.max_scan_area
                 if scan_area.x + scan_area.width > max_area.width:
                     raise ValueError(
                         f"scan_area extends beyond scanner width: "

@@ -75,12 +75,12 @@ Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner ob
 ### Scanner lifecycle
 
 1. `list_scanners()` returns lightweight `Scanner` objects (no device session). Each Scanner has `name` (always populated, platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA where WSD reports the driver vendor), and `model` (SANE only; None on macOS/WIA).
-2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources`, `resolutions`, `color_modes`, `max_scan_area`, `defaults`
+2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources` (list of `SourceInfo`) and `defaults`
 3. `scanner.scan(...)` calls `scanner.scan_pages()` which yields `ScannedPage` objects (raw pixels), then `build_pdf()` converts them into a single PDF
 4. `scanner.scan_pages(...)` yields individual `ScannedPage` objects for preview/reordering workflows
 5. `scanner.close()` releases the session
 
-Properties like `sources`, `resolutions`, `color_modes` raise `ScannerNotOpenError` if accessed before `open()`.
+`scanner.sources` returns `list[SourceInfo]` where each `SourceInfo` bundles `type` (ScanSource), `resolutions`, `color_modes`, and `max_scan_area` for one source. `sources` and `defaults` raise `ScannerNotOpenError` if accessed before `open()`.
 
 ### ScannedPage and build_pdf
 

@@ -26,6 +26,7 @@ from .._types import (
     ScannerDefaults,
     ScanOptions,
     ScanSource,
+    SourceInfo,
     check_progress,
 )
 
@@ -297,7 +298,28 @@ def _read_resolutions(device: object) -> list[int]:
         return []
 
 
-def _read_defaults(device: object, sources: list[ScanSource]) -> ScannerDefaults | None:
+def _read_color_modes_from_fu(fu: object) -> list[ColorMode]:
+    """Infer supported color modes from a functional unit's bit depths."""
+    try:
+        supported = fu.supportedBitDepths()
+        if supported is not None:
+            modes: list[ColorMode] = []
+            if supported.containsIndex_(8):
+                modes.append(ColorMode.COLOR)
+                modes.append(ColorMode.GRAY)
+            if supported.containsIndex_(1):
+                modes.append(ColorMode.BW)
+            if modes:
+                return modes
+    except Exception:
+        pass
+    return [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
+
+
+def _read_defaults(
+    device: object,
+    sources: list[SourceInfo],
+) -> ScannerDefaults | None:
     """Read default settings from the selected functional unit."""
     try:
         fu = device.selectedFunctionalUnit()
@@ -309,12 +331,18 @@ def _read_defaults(device: object, sources: list[ScanSource]) -> ScannerDefaults
         except Exception:
             dpi = 300
 
-        source = sources[0] if sources else None
+        first = sources[0] if sources else None
+        src_modes = first.color_modes if first else []
+        color_mode = (
+            ColorMode.COLOR
+            if ColorMode.COLOR in src_modes
+            else (src_modes[0] if src_modes else ColorMode.COLOR)
+        )
 
         return ScannerDefaults(
             dpi=dpi,
-            color_mode=ColorMode.COLOR,
-            source=source,
+            color_mode=color_mode,
+            source=first.type if first else None,
         )
     except Exception:
         return None
@@ -511,19 +539,23 @@ class MacOSBackend:
             )
 
         self._open_sessions.add(scanner.name)
-        scanner._sources = _read_sources_from_device(device)
+        source_types = _read_sources_from_device(device)
 
-        # Read maximum scan area per functional unit / source.
-        remaining_sources = set(scanner._sources)
+        # Read per-source capabilities from each functional unit.
+        remaining_sources = set(source_types)
+        source_infos: dict[ScanSource, SourceInfo] = {}
         try:
             fu = device.selectedFunctionalUnit()
             if fu is not None:
-                area = _scan_area_from_fu(fu)
-                if area is not None:
-                    fu_source = _ICC_SOURCE_MAP.get(fu.type())
-                    if fu_source is not None and fu_source in remaining_sources:
-                        scanner._max_scan_areas[fu_source] = area
-                        remaining_sources.discard(fu_source)
+                fu_source = _ICC_SOURCE_MAP.get(fu.type())
+                if fu_source is not None and fu_source in remaining_sources:
+                    source_infos[fu_source] = SourceInfo(
+                        type=fu_source,
+                        resolutions=_read_resolutions(device),
+                        color_modes=_read_color_modes_from_fu(fu),
+                        max_scan_area=_scan_area_from_fu(fu),
+                    )
+                    remaining_sources.discard(fu_source)
         except Exception:
             pass
 
@@ -554,9 +586,12 @@ class MacOSBackend:
                     )
                 fu = device.selectedFunctionalUnit()
                 if fu is not None and fu.type() == icc_type:
-                    area = _scan_area_from_fu(fu)
-                    if area is not None:
-                        scanner._max_scan_areas[source] = area
+                    source_infos[source] = SourceInfo(
+                        type=source,
+                        resolutions=_read_resolutions(device),
+                        color_modes=_read_color_modes_from_fu(fu),
+                        max_scan_area=_scan_area_from_fu(fu),
+                    )
             except Exception:
                 pass
 
@@ -580,8 +615,8 @@ class MacOSBackend:
             except Exception:
                 pass
 
-        scanner._resolutions = _read_resolutions(device)
-        scanner._color_modes = [ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW]
+        # Preserve source_types ordering.
+        scanner._sources = [source_infos[s] for s in source_types if s in source_infos]
         scanner._defaults = _read_defaults(device, scanner._sources)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:

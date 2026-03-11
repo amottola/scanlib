@@ -13,6 +13,7 @@ from scanlib._types import (
     ScanSource,
     ScannedDocument,
     ScannedPage,
+    SourceInfo,
     build_pdf,
 )
 
@@ -143,12 +144,7 @@ class TestScanner:
             assert s.defaults is defaults
             assert s.defaults.dpi == 300
 
-    def test_resolutions_raises_when_not_open(self):
-        s = Scanner(name="test", vendor=None, model=None, backend="sane")
-        with pytest.raises(ScannerNotOpenError):
-            _ = s.resolutions
-
-    def test_resolutions_default_empty(self):
+    def test_sources_default_empty(self):
         mock_backend = type(
             "B",
             (),
@@ -165,11 +161,18 @@ class TestScanner:
             _backend_impl=mock_backend,
         )
         with s:
-            assert s.resolutions == []
+            assert s.sources == []
 
-    def test_resolutions_populated(self):
+    def test_sources_populated(self):
         def open_scanner(self, s):
-            s._resolutions = [150, 300, 600]
+            s._sources = [
+                SourceInfo(
+                    type=ScanSource.FLATBED,
+                    resolutions=[150, 300, 600],
+                    color_modes=[ColorMode.COLOR, ColorMode.GRAY],
+                    max_scan_area=ScanArea(0, 0, 2100, 2970),
+                )
+            ]
 
         mock_backend = type(
             "B",
@@ -187,77 +190,12 @@ class TestScanner:
             _backend_impl=mock_backend,
         )
         with s:
-            assert s.resolutions == [150, 300, 600]
-
-    def test_color_modes_raises_when_not_open(self):
-        s = Scanner(name="test", vendor=None, model=None, backend="sane")
-        with pytest.raises(ScannerNotOpenError):
-            _ = s.color_modes
-
-    def test_color_modes_default_empty(self):
-        mock_backend = type(
-            "B",
-            (),
-            {
-                "open_scanner": lambda self, s: None,
-                "close_scanner": lambda self, s: None,
-            },
-        )()
-        s = Scanner(
-            name="test",
-            vendor=None,
-            model=None,
-            backend="sane",
-            _backend_impl=mock_backend,
-        )
-        with s:
-            assert s.color_modes == []
-
-    def test_color_modes_populated(self):
-        def open_scanner(self, s):
-            s._color_modes = [ColorMode.COLOR, ColorMode.GRAY]
-
-        mock_backend = type(
-            "B",
-            (),
-            {
-                "open_scanner": open_scanner,
-                "close_scanner": lambda self, s: None,
-            },
-        )()
-        s = Scanner(
-            name="test",
-            vendor=None,
-            model=None,
-            backend="sane",
-            _backend_impl=mock_backend,
-        )
-        with s:
-            assert s.color_modes == [ColorMode.COLOR, ColorMode.GRAY]
-
-    def test_max_scan_area_raises_when_not_open(self):
-        s = Scanner(name="test", vendor=None, model=None, backend="sane")
-        with pytest.raises(ScannerNotOpenError):
-            _ = s.max_scan_area
-
-    def test_max_scan_area_default_empty(self):
-        mock_backend = type(
-            "B",
-            (),
-            {
-                "open_scanner": lambda self, s: None,
-                "close_scanner": lambda self, s: None,
-            },
-        )()
-        s = Scanner(
-            name="test",
-            vendor=None,
-            model=None,
-            backend="sane",
-            _backend_impl=mock_backend,
-        )
-        with s:
-            assert s.max_scan_area == {}
+            assert len(s.sources) == 1
+            si = s.sources[0]
+            assert si.type == ScanSource.FLATBED
+            assert si.resolutions == [150, 300, 600]
+            assert si.color_modes == [ColorMode.COLOR, ColorMode.GRAY]
+            assert si.max_scan_area == ScanArea(0, 0, 2100, 2970)
 
     def test_context_manager(self):
         mock_backend = type(
@@ -544,14 +482,24 @@ class TestScanPages:
 
     def _open_scanner(self, **caps):
         """Create a mock-opened Scanner with given capabilities."""
+        source_types = caps.get("sources", [ScanSource.FLATBED])
+        raw_res = caps.get("resolutions", [100, 200, 300])
+        raw_modes = caps.get("color_modes", [ColorMode.COLOR, ColorMode.GRAY])
         max_scan_areas = caps.pop("max_scan_areas", None)
 
         def open_scanner(be, s):
-            s._resolutions = caps.get("resolutions", [100, 200, 300])
-            s._color_modes = caps.get("color_modes", [ColorMode.COLOR, ColorMode.GRAY])
-            s._sources = caps.get("sources", [ScanSource.FLATBED])
-            if max_scan_areas is not None:
-                s._max_scan_areas = max_scan_areas
+            source_infos = []
+            for src in source_types:
+                area = max_scan_areas.get(src) if max_scan_areas is not None else None
+                source_infos.append(
+                    SourceInfo(
+                        type=src,
+                        resolutions=raw_res,
+                        color_modes=raw_modes,
+                        max_scan_area=area,
+                    )
+                )
+            s._sources = source_infos
 
         mock_backend = type(
             "B",

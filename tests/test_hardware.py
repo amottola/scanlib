@@ -15,6 +15,7 @@ from scanlib._types import (
     Scanner,
     ScanSource,
     ScannedDocument,
+    SourceInfo,
 )  # noqa: F401
 
 
@@ -60,21 +61,24 @@ class TestOpenScanner:
     def test_open_populates_sources(self):
         with _scanners[0] as scanner:
             assert isinstance(scanner.sources, list)
-            for source in scanner.sources:
-                assert isinstance(source, ScanSource)
+            assert len(scanner.sources) >= 1
+            for si in scanner.sources:
+                assert isinstance(si, SourceInfo)
+                assert isinstance(si.type, ScanSource)
+                assert isinstance(si.resolutions, list)
+                assert isinstance(si.color_modes, list)
 
     @pytest.mark.timeout(30)
     def test_open_populates_max_scan_area(self):
         with _scanners[0] as scanner:
-            areas = scanner.max_scan_area
-            assert isinstance(areas, dict)
-            for source, area in areas.items():
-                assert isinstance(source, ScanSource)
-                assert isinstance(area, ScanArea)
-                assert area.x == 0
-                assert area.y == 0
-                assert area.width > 0
-                assert area.height > 0
+            for si in scanner.sources:
+                if si.max_scan_area is not None:
+                    area = si.max_scan_area
+                    assert isinstance(area, ScanArea)
+                    assert area.x == 0
+                    assert area.y == 0
+                    assert area.width > 0
+                    assert area.height > 0
 
 
 @requires_scanner
@@ -95,7 +99,10 @@ class TestScanHardware:
     @pytest.mark.timeout(120)
     def test_scan_grayscale(self):
         with _scanners[0] as scanner:
-            if ColorMode.GRAY not in scanner.color_modes:
+            all_modes = set()
+            for si in scanner.sources:
+                all_modes.update(si.color_modes)
+            if ColorMode.GRAY not in all_modes:
                 pytest.skip("scanner does not support grayscale")
             try:
                 doc = scanner.scan(color_mode=ColorMode.GRAY)
@@ -109,7 +116,8 @@ class TestScanHardware:
     @pytest.mark.timeout(120)
     def test_scan_custom_dpi(self):
         with _scanners[0] as scanner:
-            dpi = scanner.resolutions[0]
+            first = scanner.sources[0]
+            dpi = first.resolutions[0]
             doc = scanner.scan(dpi=dpi)
             assert doc.dpi == dpi
 

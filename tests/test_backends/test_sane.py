@@ -11,6 +11,7 @@ from scanlib._types import (
     Scanner,
     ScanOptions,
     ScanSource,
+    SourceInfo,
 )
 
 
@@ -166,8 +167,9 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert ScanSource.FLATBED in scanners[0]._sources
-        assert ScanSource.FEEDER in scanners[0]._sources
+        source_types = [si.type for si in scanners[0]._sources]
+        assert ScanSource.FLATBED in source_types
+        assert ScanSource.FEEDER in source_types
 
     def test_open_scanner_parses_max_scan_area(self, mock_sane):
         mock_dev = _make_mock_dev(
@@ -186,12 +188,12 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        areas = scanners[0]._max_scan_areas
-        assert ScanSource.FLATBED in areas
-        assert areas[ScanSource.FLATBED].x == 0
-        assert areas[ScanSource.FLATBED].y == 0
-        assert areas[ScanSource.FLATBED].width == 2159
-        assert areas[ScanSource.FLATBED].height == 2970
+        fb = next(si for si in scanners[0]._sources if si.type == ScanSource.FLATBED)
+        assert fb.max_scan_area is not None
+        assert fb.max_scan_area.x == 0
+        assert fb.max_scan_area.y == 0
+        assert fb.max_scan_area.width == 2159
+        assert fb.max_scan_area.height == 2970
 
     def test_open_scanner_max_scan_area_empty_without_options(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -202,7 +204,7 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert scanners[0]._max_scan_areas == {}
+        assert scanners[0]._sources == []
 
     def test_close_scanner(self, mock_sane):
         mock_dev = _make_mock_dev()
@@ -532,22 +534,25 @@ class TestSaneBackend:
         assert defaults.color_mode == ColorMode.COLOR
         assert defaults.source == ScanSource.FLATBED
 
-        assert 300 in scanners[0]._resolutions
-        assert 600 in scanners[0]._resolutions
-        assert ColorMode.COLOR in scanners[0]._color_modes
-        assert ColorMode.GRAY in scanners[0]._color_modes
-        assert ColorMode.BW in scanners[0]._color_modes
+        fb = next(si for si in scanners[0]._sources if si.type == ScanSource.FLATBED)
+        assert 300 in fb.resolutions
+        assert 600 in fb.resolutions
+        assert ColorMode.COLOR in fb.color_modes
+        assert ColorMode.GRAY in fb.color_modes
+        assert ColorMode.BW in fb.color_modes
 
     def test_open_scanner_resolutions_from_range(self, mock_sane):
         """Resolution constraint as range tuple produces a list."""
         mock_dev = _make_mock_dev(
             [
+                ("source", "Source", "", 3, 0, 0, 0, ["Flatbed"]),
                 ("resolution", "Resolution", "", 1, 4, 0, 0, (75, 1200, 75)),
             ]
         )
         mock_dev.get_option.side_effect = lambda name: {
             "resolution": 300,
             "mode": "color",
+            "source": "Flatbed",
         }.get(name)
 
         mock_sane.get_devices.return_value = [("s:1", "V", "M", "scanner")]
@@ -557,9 +562,10 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         backend.open_scanner(scanners[0])
 
-        assert 75 in scanners[0]._resolutions
-        assert 300 in scanners[0]._resolutions
-        assert 1200 in scanners[0]._resolutions
+        fb = next(si for si in scanners[0]._sources if si.type == ScanSource.FLATBED)
+        assert 75 in fb.resolutions
+        assert 300 in fb.resolutions
+        assert 1200 in fb.resolutions
 
     def test_open_scanner_defaults_none_on_failure(self, mock_sane):
         """Defaults gracefully return None if get_option fails entirely."""

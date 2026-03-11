@@ -69,6 +69,7 @@ from .._types import (
     ScannerDefaults,
     ScanOptions,
     ScanSource,
+    SourceInfo,
     check_progress,
 )
 
@@ -935,16 +936,13 @@ class WiaBackend:
         except Exception:
             root_storage = None
 
-        sources: list[ScanSource] = []
+        source_types: list[ScanSource] = []
+        device_area: ScanArea | None = None
         if root_storage is not None:
-            sources = _read_wia_sources(root_storage)
-            area = _read_wia_max_scan_area(root_storage)
-            if area is not None:
-                for source in sources:
-                    scanner._max_scan_areas[source] = area
-        if not sources:
-            sources = [ScanSource.FLATBED]
-        scanner._sources = sources
+            source_types = _read_wia_sources(root_storage)
+            device_area = _read_wia_max_scan_area(root_storage)
+        if not source_types:
+            source_types = [ScanSource.FLATBED]
 
         # Get first child item for item-level properties
         child_item = None
@@ -956,21 +954,51 @@ class WiaBackend:
         except Exception:
             pass
 
+        source_infos: list[SourceInfo] = []
         if child_item is not None:
             try:
                 item_storage = child_item.QueryInterface(IWiaPropertyStorage)
-                scanner._resolutions = _read_wia_resolutions(item_storage)
-                scanner._color_modes = _read_wia_color_modes(item_storage)
-                scanner._defaults = _read_wia_defaults(item_storage, sources)
+
+                # Read per-source resolutions and color modes.
+                for source in source_types:
+                    if root_storage is not None:
+                        try:
+                            select_val = (
+                                _FEEDER if source == ScanSource.FEEDER else _FLATBED
+                            )
+                            _write_prop(
+                                root_storage,
+                                _WIA_DPS_DOCUMENT_HANDLING_SELECT,
+                                select_val,
+                            )
+                        except Exception:
+                            pass
+                    source_infos.append(
+                        SourceInfo(
+                            type=source,
+                            resolutions=_read_wia_resolutions(item_storage),
+                            color_modes=_read_wia_color_modes(item_storage),
+                            max_scan_area=device_area,
+                        )
+                    )
+
+                scanner._defaults = _read_wia_defaults(item_storage, source_types)
             except Exception:
-                scanner._resolutions = []
-                scanner._color_modes = []
                 scanner._defaults = None
         else:
-            scanner._resolutions = []
-            scanner._color_modes = []
+            # No child item — build SourceInfo with device-level area only
+            for source in source_types:
+                source_infos.append(
+                    SourceInfo(
+                        type=source,
+                        resolutions=[],
+                        color_modes=[],
+                        max_scan_area=device_area,
+                    )
+                )
             scanner._defaults = None
 
+        scanner._sources = source_infos
         self._handles[scanner.name] = (root_item, child_item)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:

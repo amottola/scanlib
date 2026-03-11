@@ -12,10 +12,14 @@ scanner = scanners[0]
 
 with scanner:
     print(f"Using: {scanner.display_name}")
-    print(f"Supported color modes: {[m.value for m in scanner.color_modes]}")
+
+    # Use the first source's color mode list for compatibility checks.
+    first = scanner.sources[0] if scanner.sources else None
+    supported_modes = first.color_modes if first else []
+    print(f"Supported color modes: {[m.value for m in supported_modes]}")
 
     for mode in (ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW):
-        if mode not in scanner.color_modes:
+        if supported_modes and mode not in supported_modes:
             print(f"\n{mode.value} — not supported, skipping")
             continue
 

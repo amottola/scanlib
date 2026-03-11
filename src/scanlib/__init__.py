@@ -26,6 +26,7 @@ from ._types import (
     ScanSource,
     ScannedDocument,
     ScannedPage,
+    SourceInfo,
     build_pdf,
 )
 
@@ -43,6 +44,7 @@ __all__ = [
     "ScanSource",
     "ScannedDocument",
     "ScannedPage",
+    "SourceInfo",
     "ScanLibError",
     "ScanError",
     "ScanAborted",

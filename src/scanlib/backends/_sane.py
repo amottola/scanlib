@@ -25,6 +25,7 @@ from .._types import (
     ScannerDefaults,
     ScanOptions,
     ScanSource,
+    SourceInfo,
     check_progress,
 )
 
@@ -680,11 +681,7 @@ def _pick_default_color_mode(modes: list[ColorMode]) -> ColorMode:
     return ColorMode.COLOR
 
 
-def _read_defaults(
-    resolutions: list[int],
-    color_modes: list[ColorMode],
-    sources: list[ScanSource],
-) -> ScannerDefaults | None:
+def _read_defaults(sources: list[SourceInfo]) -> ScannerDefaults | None:
     """Synthesize sensible defaults from the device's supported options.
 
     SANE has no API for "recommended" defaults — some backends (e.g. eSCL)
@@ -692,10 +689,13 @@ def _read_defaults(
     closest available), Color mode if supported, and the first source.
     """
     try:
+        if not sources:
+            return ScannerDefaults(dpi=300, color_mode=ColorMode.COLOR, source=None)
+        first = sources[0]
         return ScannerDefaults(
-            dpi=_pick_default_dpi(resolutions),
-            color_mode=_pick_default_color_mode(color_modes),
-            source=sources[0] if sources else None,
+            dpi=_pick_default_dpi(first.resolutions),
+            color_mode=_pick_default_color_mode(first.color_modes),
+            source=first.type,
         )
     except Exception:
         return None
@@ -833,16 +833,15 @@ class SaneBackend:
         self._handles[scanner.name] = dev
 
         opts = _get_options(dev)
-        scanner._sources, dev._sane_source_names = _parse_sources(opts)
-        scanner._resolutions = _parse_resolutions(opts)
-        scanner._color_modes, dev._sane_mode_names = _parse_color_modes(opts)
-        scanner._defaults = _read_defaults(
-            scanner._resolutions,
-            scanner._color_modes,
-            scanner._sources,
-        )
+        source_types, dev._sane_source_names = _parse_sources(opts)
 
-        for source in scanner._sources:
+        # Read initial (pre-source-switch) values as fallback.
+        initial_resolutions = _parse_resolutions(opts)
+        initial_color_modes, dev._sane_mode_names = _parse_color_modes(opts)
+
+        # Per-source capabilities — switching source can change constraints.
+        source_infos: list[SourceInfo] = []
+        for source in source_types:
             try:
                 source_str = dev._sane_source_names.get(
                     source,
@@ -852,9 +851,30 @@ class SaneBackend:
             except Exception:
                 pass
             source_opts = _get_options(dev)
+
             area = _parse_max_scan_area(source_opts)
-            if area is not None:
-                scanner._max_scan_areas[source] = area
+
+            resolutions = _parse_resolutions(source_opts)
+            if not resolutions:
+                resolutions = initial_resolutions
+
+            color_modes, sane_names = _parse_color_modes(source_opts)
+            if color_modes:
+                dev._sane_mode_names.update(sane_names)
+            else:
+                color_modes = initial_color_modes
+
+            source_infos.append(
+                SourceInfo(
+                    type=source,
+                    resolutions=resolutions,
+                    color_modes=color_modes,
+                    max_scan_area=area,
+                )
+            )
+
+        scanner._sources = source_infos
+        scanner._defaults = _read_defaults(scanner._sources)
 
     def close_scanner(self, scanner: Scanner) -> None:
         dev = self._handles.pop(scanner.name, None)

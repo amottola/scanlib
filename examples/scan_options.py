@@ -12,8 +12,12 @@ scanner = scanners[0]
 
 with scanner:
     print(f"Using: {scanner.display_name}")
-    print(f"Sources: {[s.value for s in scanner.sources]}")
-    print(f"Max scan areas: {scanner.max_scan_area}")
+    for si in scanner.sources:
+        print(f"  Source: {si.type.value}")
+        if si.max_scan_area:
+            w_mm = si.max_scan_area.width / 10
+            h_mm = si.max_scan_area.height / 10
+            print(f"    Max area: {w_mm:.0f} x {h_mm:.0f} mm")
     if scanner.defaults:
         d = scanner.defaults
         print(f"Defaults: {d.dpi} dpi, {d.color_mode.value}, source={d.source}")
@@ -24,9 +28,11 @@ with scanner:
         return True  # return False to abort
 
     # Pick a DPI the scanner actually supports (prefer 150, fall back to default)
+    first = scanner.sources[0] if scanner.sources else None
+    supported_dpi = first.resolutions if first else []
     dpi = 150
-    if scanner.resolutions and dpi not in scanner.resolutions:
-        dpi = scanner.defaults.dpi if scanner.defaults else scanner.resolutions[0]
+    if supported_dpi and dpi not in supported_dpi:
+        dpi = scanner.defaults.dpi if scanner.defaults else supported_dpi[0]
 
     print(f"\nScanning A4 grayscale at {dpi} dpi...")
     doc = scanner.scan(

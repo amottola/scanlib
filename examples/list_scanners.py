@@ -18,16 +18,14 @@ for scanner in scanners:
         print(f"    Model:  {scanner.model}")
 
     with scanner:
-        if scanner.sources:
-            print(f"    Sources:      {[s.value for s in scanner.sources]}")
-        if scanner.resolutions:
-            print(f"    Resolutions:  {scanner.resolutions} dpi")
-        if scanner.color_modes:
-            print(f"    Color modes:  {[m.value for m in scanner.color_modes]}")
-        if scanner.max_scan_area:
-            for src, area in scanner.max_scan_area.items():
-                w_mm, h_mm = area.width / 10, area.height / 10
-                print(f"    Max area ({src.value}): {w_mm:.0f} x {h_mm:.0f} mm")
+        for si in scanner.sources:
+            print(f"    Source: {si.type.value}")
+            print(f"      Resolutions:  {si.resolutions} dpi")
+            print(f"      Color modes:  {[m.value for m in si.color_modes]}")
+            if si.max_scan_area:
+                w_mm = si.max_scan_area.width / 10
+                h_mm = si.max_scan_area.height / 10
+                print(f"      Max area:     {w_mm:.0f} x {h_mm:.0f} mm")
         if scanner.defaults:
             d = scanner.defaults
             src = d.source.value if d.source else "none"

@@ -12,10 +12,11 @@ scanner = scanners[0]
 
 with scanner:
     print(f"Using: {scanner.display_name}")
-    print(f"Sources: {[s.value for s in scanner.sources]}")
+    source_types = [si.type for si in scanner.sources]
+    print(f"Sources: {[s.value for s in source_types]}")
 
     # -- Automatic document feeder (ADF) --
-    if ScanSource.FEEDER in scanner.sources:
+    if ScanSource.FEEDER in source_types:
         print("\nScanning all pages from the document feeder...")
         try:
             doc = scanner.scan(source=ScanSource.FEEDER)
@@ -27,7 +28,7 @@ with scanner:
             print(f"  {doc.page_count} page(s) — saved to scan_feeder.pdf")
 
     # -- Flatbed multi-page with user prompts --
-    elif ScanSource.FLATBED in scanner.sources or not scanner.sources:
+    elif ScanSource.FLATBED in source_types or not scanner.sources:
         print("\nFlatbed multi-page scan (press Enter for next page, 'q' to stop):")
 
         def next_page(pages_so_far: int) -> bool:
@@ -35,9 +36,7 @@ with scanner:
             return reply.lower() != "q"
 
         doc = scanner.scan(
-            source=(
-                ScanSource.FLATBED if ScanSource.FLATBED in scanner.sources else None
-            ),
+            source=(ScanSource.FLATBED if ScanSource.FLATBED in source_types else None),
             next_page=next_page,
         )
         with open("scan_multi.pdf", "wb") as f:
