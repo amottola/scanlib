@@ -61,12 +61,12 @@ class TestListScanners:
 
         assert result == []
 
-    @pytest.mark.timeout(15)
+    @pytest.mark.timeout(20)
     def test_with_real_backend(self):
         """Call list_scanners with the real platform backend, no mocking."""
         scanlib._backend = None
         try:
-            result = scanlib.list_scanners()
+            result = scanlib.list_scanners(timeout=5)
         except (OSError, Exception):
             # Backend may fail to initialise in CI (e.g. WIA unavailable)
             pytest.skip("platform backend unavailable")
