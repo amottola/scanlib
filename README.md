@@ -6,7 +6,7 @@
 
 A multiplatform document scanning library for Python.
 
-scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. Scanned pages can be encoded as JPEG or lossless PNG, and assembled into multi-page PDFs. JPEG encoding uses platform-native encoders (ImageIO on macOS, WIC on Windows, libjpeg on Linux), PNG encoding uses stdlib `zlib`, pixel conversion is handled by a bundled C extension, and PDF assembly uses only the standard library.
+scanlib provides a unified API for document scanning across Windows, macOS, and Linux, using platform-native scanning backends. It was designed with minimal dependencies as a core goal — the library uses no external image or PDF processing libraries. Scanned pages can be encoded as JPEG or lossless PNG, and assembled into multi-page PDFs. JPEG encoding uses platform-native encoders (ImageIO on macOS, WIC on Windows, libjpeg compiled into the C extension on Linux), PNG encoding uses stdlib `zlib`, pixel conversion is handled by a bundled C extension, and PDF assembly uses only the standard library.
 
 ## Requirements & Installation
 
@@ -20,11 +20,11 @@ Platform backends and their Python bindings are installed automatically by pip:
 
 | Platform | Backend | Python dependency | System requirement |
 |----------|---------|-------------------|--------------------|
-| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`) |
+| **Linux** | SANE (ctypes) | *none* | `libsane` (`apt install libsane-dev`), `libjpeg` (build only: `apt install libjpeg-dev`) |
 | **macOS 10.7+** | ImageCaptureCore (pyobjc) | `pyobjc-framework-ImageCaptureCore` (auto) | *none* |
 | **Windows 10+** | WIA 2.0 ([comtypes](https://github.com/enthought/comtypes)) | `comtypes` (auto) | *none* |
 
-Page encoding supports JPEG (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux) and lossless PNG (stdlib `zlib`, no external dependency). libjpeg is pre-installed on virtually all Linux distributions.
+Page encoding supports JPEG (platform-native: ImageIO on macOS, WIC on Windows, libjpeg compiled into the C extension on Linux) and lossless PNG (stdlib `zlib`, no external dependency). Pre-built wheels bundle the JPEG encoder; building from source on Linux requires `libjpeg-dev` headers.
 
 ## Quick Start
 

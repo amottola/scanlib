@@ -8,7 +8,7 @@ macOS (ImageCaptureCore), and Windows (WIA 2.0). It returns scanned
 documents as PDF files and handles platform differences transparently.
 Scanned pages can be encoded as JPEG or lossless PNG. JPEG encoding uses
 platform-native encoders (ImageIO on macOS, WIC on Windows,
-libjpeg on Linux), PNG encoding
+libjpeg compiled into the C extension on Linux), PNG encoding
 uses stdlib ``zlib``, pixel conversion is handled by a bundled C
 extension, and PDF assembly uses only the standard library.
 
@@ -32,17 +32,19 @@ Platform backends and their Python bindings are installed automatically by pip:
 - **Windows 10+** — WIA 2.0 via `comtypes <https://github.com/enthought/comtypes>`_.
   JPEG encoding uses the built-in WIC (Windows Imaging Component).
   No additional system packages required.
-- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes, with
-  libjpeg for JPEG encoding. SANE must be installed; libjpeg is
-  pre-installed on virtually all Linux distributions:
+- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes. JPEG
+  encoding is compiled into the bundled C extension (linked against
+  libjpeg at build time). Pre-built wheels include the JPEG encoder;
+  building from source requires ``libjpeg-dev`` headers. SANE must be
+  installed:
 
   .. code-block:: bash
 
      # Debian / Ubuntu
-     apt install libsane-dev
+     apt install libsane-dev libjpeg-dev
 
      # Fedora / RHEL
-     dnf install sane-backends
+     dnf install sane-backends libjpeg-turbo-devel
 
 Page encoding supports JPEG and lossless PNG (this last one uses stdlib ``zlib``,
 no external dependency).

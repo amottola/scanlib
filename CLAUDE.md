@@ -37,7 +37,7 @@ Scanlib is a multiplatform document scanning library. It provides a unified Pyth
 
 ### C accelerator extension (`_scanlib_accel`)
 
-A required CPython C extension provides pixel conversion and BMP parsing:
+A required CPython C extension provides pixel conversion, BMP parsing, and JPEG encoding:
 
 - **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
 - **`rgb_to_bgr`** — RGB to BGR channel swap (used by WIC encoder on Windows)
@@ -46,8 +46,9 @@ A required CPython C extension provides pixel conversion and BMP parsing:
 - **`trim_rows`** — removes row padding from raw scan data
 - **`rotate_pixels`** — clockwise pixel rotation (90°/180°/270°) for 8-bit grayscale, RGB, and 1-bit BW
 - **`bmp_to_raw`** — BMP file to raw pixel conversion (handles 1/8/24/32-bit BMPs, BGR→RGB swap, bottom-up reordering)
+- **`encode_jpeg`** — JPEG encoding via libjpeg (Linux only, compiled conditionally via `#ifdef HAVE_JPEGLIB`)
 
-The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is in `setup.py`. The GIL is released during computation in all functions.
+The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is in `setup.py`. On Linux, `setup.py` links against libjpeg and defines `HAVE_JPEGLIB` to enable the JPEG encoder. The GIL is released during computation in all functions.
 
 ### Page encoding (`_jpeg.py` and `_types.py`)
 
@@ -55,7 +56,7 @@ The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is
 
 - **macOS**: ImageIO framework (always available, via ctypes)
 - **Windows**: WIC — Windows Imaging Component (always available, via raw COM vtable calls with ctypes). Uses `IWICImagingFactory`/`IWICBitmapEncoder`/`IWICBitmapFrameEncode`. The factory is created lazily on first encode to avoid COM apartment conflicts with comtypes (which defaults to STA). Quality is set via `IPropertyBag2::Write` with `"ImageQuality"` property. Color images require RGB→BGR conversion via `rgb_to_bgr` from `_scanlib_accel`.
-- **Linux**: libjpeg (standard IJG API, universally available via `libjpeg.so`). The version and struct size are probed at import time to support both IJG libjpeg and libjpeg-turbo transparently.
+- **Linux**: libjpeg, compiled into the `_scanlib_accel` C extension at build time (requires `libjpeg-dev` headers). The `_jpeg.py` Linux branch is a thin wrapper that calls `_scanlib_accel.encode_jpeg`.
 
 The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` directly for each platform — no dispatch function or boolean flags.
 
