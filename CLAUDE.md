@@ -55,7 +55,7 @@ The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is
 
 - **macOS**: ImageIO framework (always available, via ctypes)
 - **Windows**: WIC — Windows Imaging Component (always available, via raw COM vtable calls with ctypes). Uses `IWICImagingFactory`/`IWICBitmapEncoder`/`IWICBitmapFrameEncode`. The factory is created lazily on first encode to avoid COM apartment conflicts with comtypes (which defaults to STA). Quality is set via `IPropertyBag2::Write` with `"ImageQuality"` property. Color images require RGB→BGR conversion via `rgb_to_bgr` from `_scanlib_accel`.
-- **Linux**: libjpeg-turbo (required at runtime, via ctypes to `libturbojpeg`)
+- **Linux**: libjpeg (standard IJG API, universally available via `libjpeg.so`). The version and struct size are probed at import time to support both IJG libjpeg and libjpeg-turbo transparently.
 
 The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` directly for each platform — no dispatch function or boolean flags.
 
@@ -124,5 +124,5 @@ The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `
 - Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- Page encoding supports JPEG via `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg-turbo on Linux) and lossless PNG via stdlib `zlib`; pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`)
+- Page encoding supports JPEG via `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux) and lossless PNG via stdlib `zlib`; pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`)
 - `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, `build_pdf()`, and shared utilities (`check_progress`, `MM_PER_INCH`)

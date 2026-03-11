@@ -3,7 +3,7 @@
 Each platform uses a mandatory native encoder — no fallback chain:
 - macOS: ImageIO framework (always available)
 - Windows: WIC (Windows Imaging Component, always available)
-- Linux: libjpeg-turbo (required at runtime)
+- Linux: libjpeg (standard IJG API, universally available)
 """
 
 from __future__ import annotations
@@ -463,56 +463,85 @@ elif sys.platform == "win32":
 
 else:
     # ------------------------------------------------------------------ #
-    # Linux libjpeg-turbo encoder (required)                              #
+    # Linux libjpeg encoder (standard IJG API via ctypes)                 #
     # ------------------------------------------------------------------ #
 
-    _TJPF_RGB = 0
-    _TJPF_GRAY = 6
-    _TJSAMP_420 = 2
-    _TJSAMP_GRAY = 3
+    import struct as _struct
 
-    def _find_turbojpeg() -> ctypes.CDLL | None:
-        path = ctypes.util.find_library("turbojpeg")
+    _JCS_GRAYSCALE = 1
+    _JCS_RGB = 2
+    _JERR_SIZE = 1024
+    _PTR = ctypes.sizeof(ctypes.c_void_p)
+
+    # Offset of image_width in jpeg_compress_struct (stable since 6b):
+    # 4 pointers (err, mem, progress, client_data) + 2 ints
+    # (is_decompressor, global_state) + 1 pointer (dest)
+    _IMG_W_OFF = 5 * _PTR + 8
+
+    def _load_libjpeg() -> tuple[ctypes.CDLL, int, int]:
+        """Load libjpeg and return (lib, version, struct_size)."""
+        path = ctypes.util.find_library("jpeg")
         if not path:
-            return None
-        try:
-            lib = ctypes.CDLL(path)
-            lib.tjInitCompress.restype = ctypes.c_void_p
-            lib.tjCompress2.restype = ctypes.c_int
-            lib.tjCompress2.argtypes = [
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_ubyte),
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
-                ctypes.POINTER(ctypes.c_ulong),
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.c_int,
-            ]
-            lib.tjFree.argtypes = [ctypes.c_void_p]
-            lib.tjDestroy.argtypes = [ctypes.c_void_p]
-            lib.tjDestroy.restype = ctypes.c_int
-            return lib
-        except (OSError, AttributeError):
-            return None
+            raise RuntimeError(
+                "libjpeg is required on Linux but was not found. "
+                "Install it with: apt install libjpeg-dev"
+            )
+        lib = ctypes.CDLL(path)
 
-    _tj_lib = _find_turbojpeg()
-    if _tj_lib is not None:
-        _tj_handle = _tj_lib.tjInitCompress()
-        if not _tj_handle:
-            _tj_lib = None
-            _tj_handle = None
-    else:
-        _tj_handle = None
+        lib.jpeg_std_error.restype = ctypes.c_void_p
+        lib.jpeg_std_error.argtypes = [ctypes.c_void_p]
+        lib.jpeg_CreateCompress.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_size_t,
+        ]
+        lib.jpeg_set_defaults.argtypes = [ctypes.c_void_p]
+        lib.jpeg_set_quality.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        lib.jpeg_start_compress.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.jpeg_write_scanlines.restype = ctypes.c_uint
+        lib.jpeg_write_scanlines.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+            ctypes.c_uint,
+        ]
+        lib.jpeg_finish_compress.argtypes = [ctypes.c_void_p]
+        lib.jpeg_destroy_compress.argtypes = [ctypes.c_void_p]
+        lib.jpeg_mem_dest.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
 
-    if _tj_handle is None:
-        raise RuntimeError(
-            "libjpeg-turbo is required on Linux but was not found. "
-            "Install it with: apt install libturbojpeg0-dev"
-        )
+        # Probe the library version and struct size.  jpeg_CreateCompress
+        # checks both at runtime and raises on mismatch, so we try known
+        # combinations until one succeeds.
+        jerr = (ctypes.c_ubyte * _JERR_SIZE)()
+        lib.jpeg_std_error(ctypes.cast(jerr, ctypes.c_void_p))
+
+        for ver in (80, 62, 70, 90):
+            for sz in (584, 576, 560, 552, 600, 592, 568):
+                try:
+                    cinfo = (ctypes.c_ubyte * sz)()
+                    ctypes.memmove(
+                        cinfo,
+                        ctypes.byref(ctypes.c_void_p(ctypes.addressof(jerr))),
+                        _PTR,
+                    )
+                    lib.jpeg_CreateCompress(
+                        ctypes.cast(cinfo, ctypes.c_void_p), ver, sz
+                    )
+                    lib.jpeg_destroy_compress(ctypes.cast(cinfo, ctypes.c_void_p))
+                    return lib, ver, sz
+                except Exception:
+                    continue
+
+        raise RuntimeError("Could not determine libjpeg struct layout")
+
+    _jpeg, _JPEG_LIB_VERSION, _CINFO_SIZE = _load_libjpeg()
 
     def encode_jpeg(
         pixels: bytes,
@@ -521,37 +550,53 @@ else:
         color_mode: ColorMode,
         quality: int,
     ) -> bytes:
-        """Encode raw pixels as baseline JPEG using libjpeg-turbo."""
+        """Encode raw pixels as baseline JPEG using libjpeg."""
         if color_mode == ColorMode.COLOR:
-            pixel_format = _TJPF_RGB
-            subsamp = _TJSAMP_420
-            pitch = width * 3
+            components, color_space = 3, _JCS_RGB
         else:
-            pixel_format = _TJPF_GRAY
-            subsamp = _TJSAMP_GRAY
-            pitch = width
+            components, color_space = 1, _JCS_GRAYSCALE
 
-        src = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
-        jpeg_buf = ctypes.POINTER(ctypes.c_ubyte)()
-        jpeg_size = ctypes.c_ulong(0)
+        row_stride = width * components
+        cinfo = (ctypes.c_ubyte * _CINFO_SIZE)()
+        jerr = (ctypes.c_ubyte * _JERR_SIZE)()
 
-        ret = _tj_lib.tjCompress2(
-            _tj_handle,
-            src,
-            width,
-            pitch,
-            height,
-            pixel_format,
-            ctypes.byref(jpeg_buf),
-            ctypes.byref(jpeg_size),
-            subsamp,
-            quality,
-            0,
+        _jpeg.jpeg_std_error(ctypes.cast(jerr, ctypes.c_void_p))
+        ctypes.memmove(
+            cinfo,
+            ctypes.byref(ctypes.c_void_p(ctypes.addressof(jerr))),
+            _PTR,
         )
-        if ret != 0:
-            raise RuntimeError("TurboJPEG compression failed")
 
-        size = jpeg_size.value
-        result = ctypes.string_at(jpeg_buf, size)
-        _tj_lib.tjFree(jpeg_buf)
-        return result
+        cinfo_ptr = ctypes.cast(cinfo, ctypes.c_void_p)
+        _jpeg.jpeg_CreateCompress(cinfo_ptr, _JPEG_LIB_VERSION, _CINFO_SIZE)
+
+        try:
+            out_buf = ctypes.POINTER(ctypes.c_ubyte)()
+            out_size = ctypes.c_ulong(0)
+            _jpeg.jpeg_mem_dest(
+                cinfo_ptr, ctypes.byref(out_buf), ctypes.byref(out_size)
+            )
+
+            # Set image_width, image_height, input_components, in_color_space
+            _struct.pack_into(
+                "IIiI", cinfo, _IMG_W_OFF, width, height, components, color_space
+            )
+
+            _jpeg.jpeg_set_defaults(cinfo_ptr)
+            _jpeg.jpeg_set_quality(cinfo_ptr, quality, 1)
+            _jpeg.jpeg_start_compress(cinfo_ptr, 1)
+
+            src = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
+            row_arr = (ctypes.POINTER(ctypes.c_ubyte) * 1)()
+
+            for y in range(height):
+                row_arr[0] = ctypes.cast(
+                    ctypes.addressof(src) + y * row_stride,
+                    ctypes.POINTER(ctypes.c_ubyte),
+                )
+                _jpeg.jpeg_write_scanlines(cinfo_ptr, row_arr, 1)
+
+            _jpeg.jpeg_finish_compress(cinfo_ptr)
+            return ctypes.string_at(out_buf, out_size.value)
+        finally:
+            _jpeg.jpeg_destroy_compress(cinfo_ptr)

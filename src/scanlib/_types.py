@@ -148,7 +148,7 @@ class ScannedPage:
         """Encode the page as JPEG and return the bytes.
 
         Uses a platform-native encoder (ImageIO on macOS, WIC on
-        Windows, libjpeg-turbo on Linux).  *quality* ranges from
+        Windows, libjpeg on Linux).  *quality* ranges from
         1 (smallest) to 100 (best).  1-bit BW pages are unpacked to
         8-bit grayscale before encoding.
         """

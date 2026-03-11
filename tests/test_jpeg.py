@@ -1,4 +1,4 @@
-"""Tests for the JPEG encoder (platform-native: ImageIO / WIC / libjpeg-turbo)."""
+"""Tests for the JPEG encoder (platform-native: ImageIO / WIC / libjpeg)."""
 
 from __future__ import annotations
 
