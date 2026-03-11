@@ -8,7 +8,7 @@ if not scanners:
     raise SystemExit(1)
 
 with scanners[0] as scanner:
-    print(f"Using: {scanner.display_name}")
+    print(f"Using: {scanner}")
 
     # Scan pages individually
     pages = list(scanner.scan_pages())

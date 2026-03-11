@@ -11,7 +11,7 @@ if not scanners:
 scanner = scanners[0]
 
 with scanner:
-    print(f"Using: {scanner.display_name}")
+    print(f"Using: {scanner}")
     source_types = [si.type for si in scanner.sources]
     print(f"Sources: {[s.value for s in source_types]}")
 

@@ -56,25 +56,25 @@ class TestScanner:
         assert s.backend == "sane"
         assert s.is_open is False
 
-    def test_display_name_vendor_and_model(self):
+    def test_str_vendor_and_model(self):
         s = Scanner(
             name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane"
         )
-        assert s.display_name == "Epson GT-S50"
+        assert str(s) == "Epson GT-S50"
 
-    def test_display_name_vendor_only(self):
+    def test_str_vendor_only(self):
         s = Scanner(
             name="Canon ImageRUNNER", vendor="Canon", model=None, backend="imagecapture"
         )
-        assert s.display_name == "Canon"
+        assert str(s) == "Canon"
 
-    def test_display_name_model_only(self):
+    def test_str_model_only(self):
         s = Scanner(name="test:dev", vendor=None, model="GT-S50", backend="sane")
-        assert s.display_name == "GT-S50"
+        assert str(s) == "GT-S50"
 
-    def test_display_name_fallback_to_name(self):
+    def test_str_fallback_to_name(self):
         s = Scanner(name="HP Officejet", vendor=None, model=None, backend="wia")
-        assert s.display_name == "HP Officejet"
+        assert str(s) == "HP Officejet"
 
     def test_optional_fields(self):
         s = Scanner(name="test", vendor=None, model=None, backend="wia")

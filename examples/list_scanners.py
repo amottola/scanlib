@@ -10,7 +10,7 @@ if not scanners:
 print(f"Found {len(scanners)} scanner(s):\n")
 
 for scanner in scanners:
-    print(f"  {scanner.display_name}")
+    print(f"  {scanner}")
     print(f"    Name:   {scanner.name}")
     if scanner.vendor:
         print(f"    Vendor: {scanner.vendor}")

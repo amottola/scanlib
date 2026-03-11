@@ -74,7 +74,7 @@ Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner ob
 
 ### Scanner lifecycle
 
-1. `list_scanners()` returns lightweight `Scanner` objects (no device session). Each Scanner has `name` (always populated, platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA where WSD reports the driver vendor), and `model` (SANE only; None on macOS/WIA).
+1. `list_scanners()` returns lightweight `Scanner` objects (no device session). `str(scanner)` gives a human-readable name. Each Scanner has `name` (always populated, platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA where WSD reports the driver vendor), and `model` (SANE only; None on macOS/WIA).
 2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources` (list of `SourceInfo`) and `defaults`
 3. `scanner.scan(...)` calls `scanner.scan_pages()` which yields `ScannedPage` objects (raw pixels), then `build_pdf()` converts them into a single PDF
 4. `scanner.scan_pages(...)` yields individual `ScannedPage` objects for preview/reordering workflows

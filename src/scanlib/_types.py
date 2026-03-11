@@ -281,8 +281,7 @@ class Scanner:
     def name(self) -> str:
         return self._name
 
-    @property
-    def display_name(self) -> str:
+    def __str__(self) -> str:
         """Human-readable scanner name suitable for UI display."""
         if self._vendor and self._model:
             return f"{self._vendor} {self._model}"

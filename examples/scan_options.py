@@ -11,7 +11,7 @@ if not scanners:
 scanner = scanners[0]
 
 with scanner:
-    print(f"Using: {scanner.display_name}")
+    print(f"Using: {scanner}")
     for si in scanner.sources:
         print(f"  Source: {si.type.value}")
         if si.max_scan_area:

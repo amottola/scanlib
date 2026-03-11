@@ -10,7 +10,7 @@ if not scanners:
 scanner = scanners[0]
 
 with scanner:
-    print(f"Using: {scanner.display_name}")
+    print(f"Using: {scanner}")
 
     # Use the first source's resolution list for compatibility checks.
     first = scanner.sources[0] if scanner.sources else None

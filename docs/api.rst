@@ -41,10 +41,17 @@ Options & Configuration
    :members:
    :undoc-members:
 
+.. autoclass:: scanlib.ImageFormat
+   :members:
+   :undoc-members:
+
 .. autoclass:: scanlib.ScanArea
    :members:
 
 .. autoclass:: scanlib.ScannerDefaults
+   :members:
+
+.. autoclass:: scanlib.SourceInfo
    :members:
 
 Exceptions
