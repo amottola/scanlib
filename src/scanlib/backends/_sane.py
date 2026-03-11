@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import math
+import re
 import threading
 from collections import namedtuple
 from collections.abc import Iterator
@@ -258,6 +259,42 @@ def _get_devices() -> list[tuple[str, str, str, str]]:
         )
         i += 1
     return result
+
+
+_LIBUSB_RE = re.compile(r"libusb:(\d+:\d+)")
+_HPAIO_SERIAL_RE = re.compile(r"hpaio:/usb/.*\?serial=(\S+)")
+
+
+def _extract_usb_id(device_name: str) -> str | None:
+    """Extract a USB bus:device identifier from a SANE device name.
+
+    Returns a canonical "BUS:DEV" string when possible, or None for
+    network/non-USB devices.  Handles two common patterns:
+
+    - ``backend:libusb:BUS:DEV`` — used by most SANE USB backends
+    - ``hpaio:/usb/MODEL?serial=SN`` — HP's HPLIP backend; the serial
+      is resolved to bus:dev via sysfs
+    """
+    m = _LIBUSB_RE.search(device_name)
+    if m:
+        return m.group(1)
+
+    m = _HPAIO_SERIAL_RE.match(device_name)
+    if m:
+        serial = m.group(1)
+        try:
+            from pathlib import Path
+
+            for dev_dir in Path("/sys/bus/usb/devices").iterdir():
+                serial_file = dev_dir / "serial"
+                if serial_file.exists() and serial_file.read_text().strip() == serial:
+                    busnum = (dev_dir / "busnum").read_text().strip()
+                    devnum = (dev_dir / "devnum").read_text().strip()
+                    return f"{int(busnum):03d}:{int(devnum):03d}"
+        except (OSError, ValueError):
+            pass
+
+    return None
 
 
 def _open_device(name: str) -> _SaneDevice:
@@ -760,17 +797,29 @@ class SaneBackend:
             return []
         if error is not None:
             raise error
-        return [
-            Scanner(
-                name=dev_info[0],
-                vendor=dev_info[1] or None,
-                model=dev_info[2] or None,
-                backend="sane",
-                _backend_impl=self,
+        # Deduplicate by USB bus:device — multiple SANE backends
+        # may claim the same physical device.  The first entry is
+        # kept (SANE lists the most capable/reliable backend first).
+        scanners: list[Scanner] = []
+        seen_usb: set[str] = set()
+        for dev_info in result or []:
+            if dev_info[0].startswith("v4l:"):
+                continue
+            usb_id = _extract_usb_id(dev_info[0])
+            if usb_id:
+                if usb_id in seen_usb:
+                    continue
+                seen_usb.add(usb_id)
+            scanners.append(
+                Scanner(
+                    name=dev_info[0],
+                    vendor=dev_info[1] or None,
+                    model=dev_info[2] or None,
+                    backend="sane",
+                    _backend_impl=self,
+                )
             )
-            for dev_info in (result or [])
-            if "scanner" in dev_info[3].lower()
-        ]
+        return scanners
 
     def open_scanner(self, scanner: Scanner) -> None:
         try:

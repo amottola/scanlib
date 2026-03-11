@@ -99,6 +99,42 @@ class TestSaneBackend:
         assert scanners[0].model == "GT-S50"
         assert scanners[0].backend == "sane"
 
+    def test_list_scanners_mfp(self, mock_sane):
+        """Multi-function peripherals and all-in-ones are included."""
+        mock_sane.get_devices.return_value = [
+            ("hp:usb:001", "HP", "M1120", "multi-function peripheral"),
+            ("hp:usb:002", "HP", "M1005", "all-in-one"),
+        ]
+
+        backend = _make_backend()
+        scanners = backend.list_scanners()
+        assert len(scanners) == 2
+
+    def test_list_scanners_filters_v4l(self, mock_sane):
+        """v4l (webcam) devices are excluded."""
+        mock_sane.get_devices.return_value = [
+            ("v4l:/dev/video0", "Noname", "Webcam", "virtual device"),
+            ("hp:usb:001", "HP", "M1120", "multi-function peripheral"),
+        ]
+
+        backend = _make_backend()
+        scanners = backend.list_scanners()
+        assert len(scanners) == 1
+        assert scanners[0].name == "hp:usb:001"
+
+    def test_list_scanners_dedup_usb(self, mock_sane):
+        """Multiple backends for the same USB device are deduplicated."""
+        mock_sane.get_devices.return_value = [
+            ("hpljm1005:libusb:001:011", "HP", "LaserJet M1120", "mfp"),
+            ("hpaio:libusb:001:011", "HP", "M1120 MFP", "all-in-one"),
+        ]
+
+        backend = _make_backend()
+        scanners = backend.list_scanners()
+        assert len(scanners) == 1
+        # First entry wins
+        assert scanners[0].name == "hpljm1005:libusb:001:011"
+
     def test_list_scanners_empty(self, mock_sane):
         mock_sane.get_devices.return_value = []
 
