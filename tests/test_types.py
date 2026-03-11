@@ -56,11 +56,15 @@ class TestScanner:
         assert s.is_open is False
 
     def test_display_name_vendor_and_model(self):
-        s = Scanner(name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane")
+        s = Scanner(
+            name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane"
+        )
         assert s.display_name == "Epson GT-S50"
 
     def test_display_name_vendor_only(self):
-        s = Scanner(name="Canon ImageRUNNER", vendor="Canon", model=None, backend="imagecapture")
+        s = Scanner(
+            name="Canon ImageRUNNER", vendor="Canon", model=None, backend="imagecapture"
+        )
         assert s.display_name == "Canon"
 
     def test_display_name_model_only(self):
