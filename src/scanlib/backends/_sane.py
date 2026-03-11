@@ -869,6 +869,16 @@ class SaneBackend:
             raise ScanError("Scanner is not open")
 
         try:
+            # Set source first — some SANE backends reset mode/resolution
+            # when the source changes (e.g. feeder defaults to Lineart).
+            if options.source is not None and dev.has_option("source"):
+                sane_source_names = getattr(dev, "_sane_source_names", {})
+                source_str = sane_source_names.get(
+                    options.source,
+                    _SCAN_SOURCE_TO_SANE.get(options.source, options.source.value),
+                )
+                dev.set_option("source", source_str)
+
             if dev.has_option("mode"):
                 sane_mode_names = getattr(dev, "_sane_mode_names", {})
                 mode_str = sane_mode_names.get(
@@ -878,14 +888,6 @@ class SaneBackend:
                 dev.set_option("mode", mode_str)
             if dev.has_option("resolution"):
                 dev.set_option("resolution", options.dpi)
-
-            if options.source is not None and dev.has_option("source"):
-                sane_source_names = getattr(dev, "_sane_source_names", {})
-                source_str = sane_source_names.get(
-                    options.source,
-                    _SCAN_SOURCE_TO_SANE.get(options.source, options.source.value),
-                )
-                dev.set_option("source", source_str)
 
             if options.scan_area is not None:
                 area = options.scan_area

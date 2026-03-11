@@ -618,13 +618,24 @@ class MacOSBackend:
         try:
             device.setTransferMode_(_TRANSFER_MODE_MEMORY_BASED)
 
-            # Select scan source if specified
+            # Select scan source if specified, and wait for the switch
+            # to complete — requestSelectFunctionalUnit_ is asynchronous.
             if options.source is not None:
                 icc_type = _SCAN_SOURCE_TO_ICC.get(options.source)
                 if icc_type is not None:
                     unit_types = device.availableFunctionalUnitTypes()
                     if unit_types and icc_type in unit_types:
                         device.requestSelectFunctionalUnit_(icc_type)
+                        deadline = NSDate.dateWithTimeIntervalSinceNow_(2.0)
+                        while True:
+                            fu = device.selectedFunctionalUnit()
+                            if fu is not None and fu.type() == icc_type:
+                                break
+                            if NSDate.date().compare_(deadline) != -1:
+                                break
+                            NSRunLoop.currentRunLoop().runUntilDate_(
+                                NSDate.dateWithTimeIntervalSinceNow_(0.1),
+                            )
 
             # Configure functional unit settings
             fu = device.selectedFunctionalUnit()
