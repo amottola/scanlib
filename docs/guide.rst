@@ -12,7 +12,8 @@ List available scanners and scan a document:
 
    # Discover scanners
    scanners = scanlib.list_scanners()
-   print(scanners)  # [Scanner(name='...', backend='sane', closed)]
+   for s in scanners:
+       print(s.display_name)  # e.g. "Epson GT-S50", "HP Officejet Pro 8500"
 
    # Scan a document
    with scanners[0] as scanner:

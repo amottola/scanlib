@@ -10,7 +10,7 @@ if not scanners:
 scanner = scanners[0]
 
 with scanner:
-    print(f"Using: {scanner.name}")
+    print(f"Using: {scanner.display_name}")
     print(f"Supported resolutions: {scanner.resolutions}")
 
     for dpi in (75, 150, 300, 600):

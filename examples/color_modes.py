@@ -11,7 +11,7 @@ if not scanners:
 scanner = scanners[0]
 
 with scanner:
-    print(f"Using: {scanner.name}")
+    print(f"Using: {scanner.display_name}")
     print(f"Supported color modes: {[m.value for m in scanner.color_modes]}")
 
     for mode in (ColorMode.COLOR, ColorMode.GRAY, ColorMode.BW):

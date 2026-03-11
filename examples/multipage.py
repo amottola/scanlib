@@ -11,7 +11,7 @@ if not scanners:
 scanner = scanners[0]
 
 with scanner:
-    print(f"Using: {scanner.name}")
+    print(f"Using: {scanner.display_name}")
     print(f"Sources: {[s.value for s in scanner.sources]}")
 
     # -- Automatic document feeder (ADF) --

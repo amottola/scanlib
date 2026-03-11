@@ -9,7 +9,7 @@ if not scanners:
     raise SystemExit(1)
 
 scanner = scanners[0]
-print(f"Using: {scanner.name}")
+print(f"Using: {scanner.display_name}")
 
 # Open a session and scan with default settings (300 dpi, color, JPEG)
 with scanner:
