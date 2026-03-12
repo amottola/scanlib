@@ -7,11 +7,7 @@
  */
 
 #define PY_SSIZE_T_CLEAN
-#ifndef Py_LIMITED_API
-#  ifndef Py_GIL_DISABLED
-#    define Py_LIMITED_API 0x03090000
-#  endif
-#endif
+/* Py_LIMITED_API is defined via setup.py for non-free-threaded builds */
 #include <Python.h>
 
 #include <string.h>
