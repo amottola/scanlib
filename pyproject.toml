@@ -30,7 +30,7 @@ line-length = 88
 target-version = ["py39"]
 
 [tool.cibuildwheel]
-build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-*"
+build = "cp39-* cp314t-*"
 skip = "*-musllinux_*"
 test-requires = ["pytest", "pytest-timeout"]
 test-command = "pytest {project}/tests --ignore={project}/tests/test_hardware.py -v"

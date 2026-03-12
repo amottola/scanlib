@@ -7,6 +7,11 @@
  */
 
 #define PY_SSIZE_T_CLEAN
+#ifndef Py_LIMITED_API
+#  ifndef Py_GIL_DISABLED
+#    define Py_LIMITED_API 0x03090000
+#  endif
+#endif
 #include <Python.h>
 
 #include <string.h>
@@ -22,27 +27,25 @@
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_rgb_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height;
 
-    if (!PyArg_ParseTuple(args, "y*ii", &data, &width, &height))
+    if (!PyArg_ParseTuple(args, "y#ii", &data, &data_len, &width, &height))
         return NULL;
 
     Py_ssize_t count = (Py_ssize_t)width * height;
-    if (data.len < count * 3) {
-        PyBuffer_Release(&data);
+    if (data_len < count * 3) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
 
     PyObject *result = PyBytes_FromStringAndSize(NULL, count);
-    if (!result) {
-        PyBuffer_Release(&data);
+    if (!result)
         return NULL;
-    }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
-    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
     Py_BEGIN_ALLOW_THREADS
     for (Py_ssize_t i = 0; i < count; i++) {
@@ -53,7 +56,6 @@ static PyObject *py_rgb_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -62,27 +64,25 @@ static PyObject *py_rgb_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_rgb_to_bgr(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height;
 
-    if (!PyArg_ParseTuple(args, "y*ii", &data, &width, &height))
+    if (!PyArg_ParseTuple(args, "y#ii", &data, &data_len, &width, &height))
         return NULL;
 
     Py_ssize_t count = (Py_ssize_t)width * height;
-    if (data.len < count * 3) {
-        PyBuffer_Release(&data);
+    if (data_len < count * 3) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
 
     PyObject *result = PyBytes_FromStringAndSize(NULL, count * 3);
-    if (!result) {
-        PyBuffer_Release(&data);
+    if (!result)
         return NULL;
-    }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
-    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
     Py_BEGIN_ALLOW_THREADS
     for (Py_ssize_t i = 0; i < count; i++) {
@@ -93,7 +93,6 @@ static PyObject *py_rgb_to_bgr(PyObject *Py_UNUSED(self), PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -102,15 +101,15 @@ static PyObject *py_rgb_to_bgr(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height;
 
-    if (!PyArg_ParseTuple(args, "y*ii", &data, &width, &height))
+    if (!PyArg_ParseTuple(args, "y#ii", &data, &data_len, &width, &height))
         return NULL;
 
     Py_ssize_t count = (Py_ssize_t)width * height;
-    if (data.len < count) {
-        PyBuffer_Release(&data);
+    if (data_len < count) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
@@ -119,13 +118,11 @@ static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
     Py_ssize_t out_len = (Py_ssize_t)row_bytes * height;
 
     PyObject *result = PyBytes_FromStringAndSize(NULL, out_len);
-    if (!result) {
-        PyBuffer_Release(&data);
+    if (!result)
         return NULL;
-    }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
-    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
     memset(dst, 0, (size_t)out_len);
 
     Py_BEGIN_ALLOW_THREADS
@@ -145,7 +142,6 @@ static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -154,29 +150,27 @@ static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_bw_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height;
 
-    if (!PyArg_ParseTuple(args, "y*ii", &data, &width, &height))
+    if (!PyArg_ParseTuple(args, "y#ii", &data, &data_len, &width, &height))
         return NULL;
 
     int row_bytes = (width + 7) / 8;
     Py_ssize_t expected = (Py_ssize_t)row_bytes * height;
-    if (data.len < expected) {
-        PyBuffer_Release(&data);
+    if (data_len < expected) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
 
     Py_ssize_t out_len = (Py_ssize_t)width * height;
     PyObject *result = PyBytes_FromStringAndSize(NULL, out_len);
-    if (!result) {
-        PyBuffer_Release(&data);
+    if (!result)
         return NULL;
-    }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
-    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
     Py_BEGIN_ALLOW_THREADS
     for (int y = 0; y < height; y++) {
@@ -189,7 +183,6 @@ static PyObject *py_bw_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -198,35 +191,31 @@ static PyObject *py_bw_to_gray(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_trim_rows(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int height, stride, row_width;
 
-    if (!PyArg_ParseTuple(args, "y*iii", &data, &height, &stride, &row_width))
+    if (!PyArg_ParseTuple(args, "y#iii", &data, &data_len, &height,
+                          &stride, &row_width))
         return NULL;
 
     if (stride <= row_width) {
-        PyObject *result = PyBytes_FromStringAndSize(
-            (const char *)data.buf, data.len);
-        PyBuffer_Release(&data);
-        return result;
+        return PyBytes_FromStringAndSize(data, data_len);
     }
 
     Py_ssize_t expected = (Py_ssize_t)stride * height;
-    if (data.len < expected) {
-        PyBuffer_Release(&data);
+    if (data_len < expected) {
         PyErr_SetString(PyExc_ValueError, "data buffer too small");
         return NULL;
     }
 
     Py_ssize_t out_len = (Py_ssize_t)row_width * height;
     PyObject *result = PyBytes_FromStringAndSize(NULL, out_len);
-    if (!result) {
-        PyBuffer_Release(&data);
+    if (!result)
         return NULL;
-    }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
-    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
     Py_BEGIN_ALLOW_THREADS
     for (int y = 0; y < height; y++) {
@@ -235,7 +224,6 @@ static PyObject *py_trim_rows(PyObject *Py_UNUSED(self), PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -244,34 +232,32 @@ static PyObject *py_trim_rows(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_strip_alpha(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height, src_channels;
 
-    if (!PyArg_ParseTuple(args, "y*iii", &data, &width, &height, &src_channels))
+    if (!PyArg_ParseTuple(args, "y#iii", &data, &data_len, &width, &height,
+                          &src_channels))
         return NULL;
 
     if (src_channels < 4) {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError, "src_channels must be >= 4");
         return NULL;
     }
 
     Py_ssize_t expected = (Py_ssize_t)width * height * src_channels;
-    if (data.len < expected) {
-        PyBuffer_Release(&data);
+    if (data_len < expected) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
 
     Py_ssize_t out_len = (Py_ssize_t)width * height * 3;
     PyObject *result = PyBytes_FromStringAndSize(NULL, out_len);
-    if (!result) {
-        PyBuffer_Release(&data);
+    if (!result)
         return NULL;
-    }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
-    unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
     Py_ssize_t count = (Py_ssize_t)width * height;
 
     Py_BEGIN_ALLOW_THREADS
@@ -284,7 +270,6 @@ static PyObject *py_strip_alpha(PyObject *Py_UNUSED(self), PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -293,17 +278,17 @@ static PyObject *py_strip_alpha(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
 
-    if (!PyArg_ParseTuple(args, "y*", &data))
+    if (!PyArg_ParseTuple(args, "y#", &data, &data_len))
         return NULL;
 
-    const unsigned char *buf = (const unsigned char *)data.buf;
-    Py_ssize_t buf_len = data.len;
+    const unsigned char *buf = (const unsigned char *)data;
+    Py_ssize_t buf_len = data_len;
 
     /* Validate BMP signature */
     if (buf_len < 54 || buf[0] != 'B' || buf[1] != 'M') {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError, "Invalid BMP data");
         return NULL;
     }
@@ -317,7 +302,6 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
     memcpy(&header_size, buf + 14, 4);
 
     if (header_size < 40) {
-        PyBuffer_Release(&data);
         PyErr_Format(PyExc_ValueError,
                      "Unsupported BMP header size: %u", header_size);
         return NULL;
@@ -336,7 +320,6 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
     int width = bmp_width;
 
     if (width <= 0 || height <= 0) {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError, "Invalid BMP dimensions");
         return NULL;
     }
@@ -359,7 +342,6 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
         channels = 0;    /* special handling */
         bit_depth = 1;
     } else {
-        PyBuffer_Release(&data);
         PyErr_Format(PyExc_ValueError,
                      "Unsupported BMP bit depth: %u", bits_per_pixel);
         return NULL;
@@ -373,7 +355,6 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
         /* 1-bit BMP: rows are bit-packed, padded to 4 bytes */
         unsigned int palette_offset = 14 + header_size;
         if ((Py_ssize_t)(palette_offset + 8) > buf_len) {
-            PyBuffer_Release(&data);
             PyErr_SetString(PyExc_ValueError, "Invalid BMP: palette truncated");
             return NULL;
         }
@@ -386,11 +367,9 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_ssize_t out_len = (Py_ssize_t)png_row_bytes * height;
 
         result = PyBytes_FromStringAndSize(NULL, out_len);
-        if (!result) {
-            PyBuffer_Release(&data);
+        if (!result)
             return NULL;
-        }
-        unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+        unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
         Py_BEGIN_ALLOW_THREADS
         for (int y = 0; y < height; y++) {
@@ -417,11 +396,9 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_ssize_t out_len = (Py_ssize_t)width * height * channels;
 
         result = PyBytes_FromStringAndSize(NULL, out_len);
-        if (!result) {
-            PyBuffer_Release(&data);
+        if (!result)
             return NULL;
-        }
-        unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+        unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
         Py_BEGIN_ALLOW_THREADS
         for (int y = 0; y < height; y++) {
@@ -447,8 +424,6 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_END_ALLOW_THREADS
     }
 
-    PyBuffer_Release(&data);
-
     /* Return (raw_bytes, width, height, color_type, bit_depth) */
     PyObject *py_w = PyLong_FromLong(width);
     PyObject *py_h = PyLong_FromLong(height);
@@ -472,11 +447,11 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_DECREF(py_bd);
         return NULL;
     }
-    PyTuple_SET_ITEM(tuple, 0, result);
-    PyTuple_SET_ITEM(tuple, 1, py_w);
-    PyTuple_SET_ITEM(tuple, 2, py_h);
-    PyTuple_SET_ITEM(tuple, 3, py_ct);
-    PyTuple_SET_ITEM(tuple, 4, py_bd);
+    PyTuple_SetItem(tuple, 0, result);
+    PyTuple_SetItem(tuple, 1, py_w);
+    PyTuple_SetItem(tuple, 2, py_h);
+    PyTuple_SetItem(tuple, 3, py_ct);
+    PyTuple_SetItem(tuple, 4, py_bd);
     return tuple;
 }
 
@@ -485,22 +460,21 @@ static PyObject *py_bmp_to_raw(PyObject *Py_UNUSED(self), PyObject *args) {
 /* ------------------------------------------------------------------ */
 
 static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height, bpp, degrees;
 
-    if (!PyArg_ParseTuple(args, "y*iiii", &data, &width, &height,
+    if (!PyArg_ParseTuple(args, "y#iiii", &data, &data_len, &width, &height,
                           &bpp, &degrees))
         return NULL;
 
     if (degrees != 90 && degrees != 180 && degrees != 270) {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError,
                         "degrees must be 90, 180, or 270");
         return NULL;
     }
 
     if (width <= 0 || height <= 0) {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError, "invalid dimensions");
         return NULL;
     }
@@ -513,13 +487,12 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
         expected = (Py_ssize_t)width * height * bpp;
     }
 
-    if (data.len < expected) {
-        PyBuffer_Release(&data);
+    if (data_len < expected) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
 
-    const unsigned char *src = (const unsigned char *)data.buf;
+    const unsigned char *src = (const unsigned char *)data;
     int new_w = (degrees == 180) ? width : height;
     int new_h = (degrees == 180) ? height : width;
 
@@ -532,11 +505,9 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_ssize_t out_len = (Py_ssize_t)dst_row_bytes * new_h;
 
         result = PyBytes_FromStringAndSize(NULL, out_len);
-        if (!result) {
-            PyBuffer_Release(&data);
+        if (!result)
             return NULL;
-        }
-        unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+        unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
         memset(dst, 0, (size_t)out_len);
 
         if (degrees != 180) {
@@ -545,7 +516,6 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
             unsigned char *tmp = (unsigned char *)malloc((size_t)npix);
             if (!tmp) {
                 Py_DECREF(result);
-                PyBuffer_Release(&data);
                 return PyErr_NoMemory();
             }
 
@@ -597,11 +567,9 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_ssize_t out_len = (Py_ssize_t)new_w * new_h * bpp;
 
         result = PyBytes_FromStringAndSize(NULL, out_len);
-        if (!result) {
-            PyBuffer_Release(&data);
+        if (!result)
             return NULL;
-        }
-        unsigned char *dst = (unsigned char *)PyBytes_AS_STRING(result);
+        unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
 
         Py_BEGIN_ALLOW_THREADS
         if (degrees == 180) {
@@ -643,7 +611,6 @@ static PyObject *py_rotate_pixels(PyObject *Py_UNUSED(self), PyObject *args) {
         Py_END_ALLOW_THREADS
     }
 
-    PyBuffer_Release(&data);
     return result;
 }
 
@@ -664,28 +631,26 @@ static void my_error_exit(j_common_ptr cinfo) {
 }
 
 static PyObject *py_encode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
-    Py_buffer data;
+    const char *data;
+    Py_ssize_t data_len;
     int width, height, num_components, quality;
 
-    if (!PyArg_ParseTuple(args, "y*iiii", &data, &width, &height,
+    if (!PyArg_ParseTuple(args, "y#iiii", &data, &data_len, &width, &height,
                           &num_components, &quality))
         return NULL;
 
     if (width <= 0 || height <= 0) {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError, "invalid dimensions");
         return NULL;
     }
     if (num_components != 1 && num_components != 3) {
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_ValueError,
                         "num_components must be 1 or 3");
         return NULL;
     }
 
     Py_ssize_t expected = (Py_ssize_t)width * height * num_components;
-    if (data.len < expected) {
-        PyBuffer_Release(&data);
+    if (data_len < expected) {
         PyErr_SetString(PyExc_ValueError, "pixel buffer too small");
         return NULL;
     }
@@ -694,14 +659,16 @@ static PyObject *py_encode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
     struct my_error_mgr jerr;
     unsigned char *outbuf = NULL;
     unsigned long outsize = 0;
+    volatile PyThreadState *gil_state = NULL;
 
     cinfo.err = jpeg_std_error(&jerr.pub);
     jerr.pub.error_exit = my_error_exit;
 
     if (setjmp(jerr.setjmp_buffer)) {
+        if (gil_state)
+            PyEval_RestoreThread((PyThreadState *)gil_state);
         jpeg_destroy_compress(&cinfo);
         free(outbuf);
-        PyBuffer_Release(&data);
         PyErr_SetString(PyExc_RuntimeError, "libjpeg encoding error");
         return NULL;
     }
@@ -718,17 +685,18 @@ static PyObject *py_encode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
     jpeg_set_quality(&cinfo, quality, TRUE);
     jpeg_start_compress(&cinfo, TRUE);
 
-    const unsigned char *src = (const unsigned char *)data.buf;
+    const unsigned char *src = (const unsigned char *)data;
     int row_stride = width * num_components;
 
-    Py_BEGIN_ALLOW_THREADS
+    gil_state = PyEval_SaveThread();
     while (cinfo.next_scanline < cinfo.image_height) {
         const unsigned char *row =
             src + (Py_ssize_t)cinfo.next_scanline * row_stride;
         JSAMPROW row_ptr = (JSAMPROW)row;
         jpeg_write_scanlines(&cinfo, &row_ptr, 1);
     }
-    Py_END_ALLOW_THREADS
+    PyEval_RestoreThread((PyThreadState *)gil_state);
+    gil_state = NULL;
 
     jpeg_finish_compress(&cinfo);
     jpeg_destroy_compress(&cinfo);
@@ -737,7 +705,6 @@ static PyObject *py_encode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
         (const char *)outbuf, (Py_ssize_t)outsize);
     free(outbuf);
 
-    PyBuffer_Release(&data);
     return result;
 }
 
