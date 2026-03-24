@@ -22,12 +22,12 @@ class TestExtractIpFromUri:
         uri = "airscan:e0:Canon MF240 http://192.168.1.10:8080/eSCL"
         assert extract_ip_from_uri(uri) == "192.168.1.10"
 
-    def test_hpaio_net(self):
-        uri = "hpaio:/net/HP_LaserJet?ip=192.168.1.20"
+    def test_ip_query_param(self):
+        uri = "backend:/net/SomeModel?ip=192.168.1.20"
         assert extract_ip_from_uri(uri) == "192.168.1.20"
 
-    def test_hpaio_net_with_extra(self):
-        uri = "hpaio:/net/HP_LaserJet?ip=192.168.1.20&port=1234"
+    def test_ip_query_param_with_extra(self):
+        uri = "backend:/net/SomeModel?ip=192.168.1.20&port=1234"
         assert extract_ip_from_uri(uri) == "192.168.1.20"
 
     def test_usb_returns_none(self):

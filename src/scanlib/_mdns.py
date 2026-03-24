@@ -328,18 +328,11 @@ def extract_ip_from_uri(uri: str) -> str | None:
     Handles patterns like:
     - ``escl:http://192.168.1.5:443/eSCL``
     - ``airscan:e0:Scanner Name http://192.168.1.5:8080/eSCL``
-    - ``hpaio:/net/MODEL?ip=192.168.1.5``
+    - ``backend:/net/MODEL?ip=192.168.1.5``
 
     Returns ``None`` for USB or otherwise non-network URIs.
     """
-    # hpaio:/net/MODEL?ip=ADDR
-    if uri.startswith("hpaio:") and "ip=" in uri:
-        idx = uri.index("ip=") + 3
-        addr = uri[idx:].split("&")[0].split("/")[0]
-        return addr or None
-
-    # escl:http://... or airscan:... http://...
-    # Find the http(s):// portion
+    # Embedded http(s):// URL (escl, airscan, etc.)
     for prefix in ("http://", "https://"):
         idx = uri.find(prefix)
         if idx != -1:
@@ -350,5 +343,11 @@ def extract_ip_from_uri(uri: str) -> str | None:
                     return host
             except Exception:
                 pass
+
+    # Query-string ``ip=ADDR`` (used by some SANE backends)
+    if "ip=" in uri:
+        idx = uri.index("ip=") + 3
+        addr = uri[idx:].split("&")[0].split("/")[0]
+        return addr or None
 
     return None
