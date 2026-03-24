@@ -150,6 +150,27 @@ running ``scan()`` or ``scan_pages()`` call will raise
 
 ``abort()`` is safe to call even when no scan is running.
 
+Cancelling Discovery
+--------------------
+
+Pass a :class:`threading.Event` to ``list_scanners()`` to cancel a
+long-running discovery from another thread:
+
+.. code-block:: python
+
+   import threading
+   import scanlib
+
+   cancel = threading.Event()
+
+   # Cancel after 5 seconds from another thread
+   threading.Timer(5, cancel.set).start()
+
+   scanners = scanlib.list_scanners(timeout=120, cancel=cancel)
+
+When the event is set, ``list_scanners()`` returns immediately with
+whatever scanners have been found (or an empty list).
+
 Thread Safety
 -------------
 

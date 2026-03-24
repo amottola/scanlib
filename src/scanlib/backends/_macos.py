@@ -30,6 +30,7 @@ from .._types import (
     ScanSource,
     SourceInfo,
     check_progress,
+    wait_or_cancel,
 )
 
 _ICC_SOURCE_MAP = {
@@ -490,9 +491,13 @@ class MacOSBackend:
 
     # --- Public ScanBackend protocol ---
 
-    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+    def list_scanners(
+        self,
+        timeout: float = DISCOVERY_TIMEOUT,
+        cancel: threading.Event | None = None,
+    ) -> list[Scanner]:
         with self._lock:
-            scanners = self._call(self._list_scanners_impl, timeout)
+            scanners = self._call(self._list_scanners_impl, timeout, cancel)
         for s in scanners:
             s._backend_impl = self
         return scanners
@@ -519,11 +524,14 @@ class MacOSBackend:
 
     # --- Implementation (runs on worker thread) ---
 
-    def _list_scanners_impl(self, timeout: float) -> list[Scanner]:
+    def _list_scanners_impl(
+        self, timeout: float, cancel: threading.Event | None = None
+    ) -> list[Scanner]:
         delegate = self._on_main(self._ensure_browser)
 
         if not delegate._done.is_set():
-            delegate._done.wait(timeout=timeout)
+            if not wait_or_cancel(delegate._done, timeout, cancel):
+                return []
 
         def _build_list():
             for removed_dev in delegate._removed:
@@ -698,9 +706,7 @@ class MacOSBackend:
             raise ScanError("Scanner is not open")
 
         # Create a fresh delegate for each scan.
-        scan_delegate = self._on_main(
-            lambda: _ScanDelegate.alloc().init()
-        )
+        scan_delegate = self._on_main(lambda: _ScanDelegate.alloc().init())
         self._on_main(device.setDelegate_, scan_delegate)
 
         try:
@@ -712,9 +718,7 @@ class MacOSBackend:
                 if icc_type is not None:
                     unit_types = self._on_main(device.availableFunctionalUnitTypes)
                     if unit_types and icc_type in unit_types:
-                        self._on_main(
-                            device.requestSelectFunctionalUnit_, icc_type
-                        )
+                        self._on_main(device.requestSelectFunctionalUnit_, icc_type)
 
                         def _check_source(expected=icc_type):
                             fu = device.selectedFunctionalUnit()

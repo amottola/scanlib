@@ -71,6 +71,7 @@ from .._types import (
     ScanSource,
     SourceInfo,
     check_progress,
+    wait_or_cancel,
 )
 
 # ---------------------------------------------------------------------------
@@ -855,7 +856,11 @@ class WiaBackend:
 
     # --- Public ScanBackend protocol ---
 
-    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+    def list_scanners(
+        self,
+        timeout: float = DISCOVERY_TIMEOUT,
+        cancel: threading.Event | None = None,
+    ) -> list[Scanner]:
         from .._mdns import browse_in_thread
 
         t_mdns, loc_box = browse_in_thread(timeout)
@@ -864,7 +869,7 @@ class WiaBackend:
         box: dict = {}
         self._queue.put((self._list_scanners_impl, (), event, box))
         self._signal_work()
-        if not event.wait(timeout):
+        if not wait_or_cancel(event, timeout, cancel):
             return []
         if "error" in box:
             raise box["error"]

@@ -64,9 +64,7 @@ class TestEncodeName:
     def test_simple(self):
         encoded = _encode_name("_uscan._tcp.local.")
         # Each label: length byte + content, terminated by \x00
-        assert encoded == (
-            b"\x06_uscan\x04_tcp\x05local\x00"
-        )
+        assert encoded == (b"\x06_uscan\x04_tcp\x05local\x00")
 
     def test_trailing_dot(self):
         assert _encode_name("foo.bar.") == _encode_name("foo.bar")

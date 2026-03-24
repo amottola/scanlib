@@ -154,9 +154,7 @@ def _parse_responses(
         name, offset = _read_name(data, offset)
         if offset + 10 > len(data):
             break
-        rtype, _, _ttl, rdlength = struct.unpack(
-            ">HHIH", data[offset : offset + 10]
-        )
+        rtype, _, _ttl, rdlength = struct.unpack(">HHIH", data[offset : offset + 10])
         offset += 10
         rdstart = offset
         offset += rdlength
@@ -170,9 +168,7 @@ def _parse_responses(
             ip = socket.inet_ntoa(data[rdstart : rdstart + 4])
             addrs.setdefault(name, []).append(ip)
         elif rtype == _TYPE_AAAA and rdlength == 16:
-            ip = socket.inet_ntop(
-                socket.AF_INET6, data[rdstart : rdstart + 16]
-            )
+            ip = socket.inet_ntop(socket.AF_INET6, data[rdstart : rdstart + 16])
             addrs.setdefault(name, []).append(ip)
         elif rtype == _TYPE_SRV and rdlength > 6:
             srv_target, _ = _read_name(data, rdstart + 6)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from importlib.metadata import version
 
 __version__ = version("scanlib")
@@ -83,14 +84,22 @@ def _get_backend() -> ScanBackend:
     return _backend
 
 
-def list_scanners(*, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+def list_scanners(
+    *,
+    timeout: float = DISCOVERY_TIMEOUT,
+    cancel: threading.Event | None = None,
+) -> list[Scanner]:
     """Return all available scanners on the current platform.
 
     *timeout* controls how long (in seconds) to wait for scanner
     discovery.  The default is :data:`DISCOVERY_TIMEOUT` (15 s).
 
+    *cancel*, if given, is a :class:`threading.Event` that the caller can
+    set from another thread to interrupt discovery early.  When the event
+    is set the function returns immediately with an empty list.
+
     The returned :class:`Scanner` objects are lightweight — no device sessions
     are opened.  Use :meth:`Scanner.open` (or the context-manager protocol)
     to start a session before scanning.
     """
-    return _get_backend().list_scanners(timeout=timeout)
+    return _get_backend().list_scanners(timeout=timeout, cancel=cancel)

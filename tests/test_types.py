@@ -94,7 +94,9 @@ class TestScanner:
         assert s.model is None
 
     def test_id_defaults_to_name(self):
-        s = Scanner(name="escl:http://192.168.1.5/eSCL", vendor=None, model=None, backend="sane")
+        s = Scanner(
+            name="escl:http://192.168.1.5/eSCL", vendor=None, model=None, backend="sane"
+        )
         assert s.id == "escl:http://192.168.1.5/eSCL"
 
     def test_id_explicit(self):
@@ -304,7 +306,6 @@ class TestNormalizeResolutions:
         """Exactly 30 entries — treated as discrete, not normalized."""
         dpis = list(range(100, 130))
         assert normalize_resolutions(dpis) == dpis
-
 
 
 class TestScanOptions:

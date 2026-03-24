@@ -143,6 +143,41 @@ class TestSaneBackend:
         scanners = backend.list_scanners()
         assert scanners == []
 
+    def test_list_scanners_cancel(self, mock_sane):
+        """Setting the cancel event returns [] immediately."""
+        import threading
+
+        block = threading.Event()
+        mock_sane.get_devices.side_effect = lambda: block.wait(10) or []
+
+        backend = _make_backend()
+        cancel = threading.Event()
+        cancel.set()  # pre-set so it returns on first poll
+        scanners = backend.list_scanners(timeout=10, cancel=cancel)
+        assert scanners == []
+
+    def test_list_scanners_cancel_during_wait(self, mock_sane):
+        """Cancel set after a short delay interrupts discovery."""
+        import threading
+        import time
+
+        block = threading.Event()
+        mock_sane.get_devices.side_effect = lambda: block.wait(10) or []
+
+        backend = _make_backend()
+        cancel = threading.Event()
+
+        def _set_cancel():
+            time.sleep(0.3)
+            cancel.set()
+
+        threading.Thread(target=_set_cancel, daemon=True).start()
+        t0 = time.monotonic()
+        scanners = backend.list_scanners(timeout=10, cancel=cancel)
+        elapsed = time.monotonic() - t0
+        assert scanners == []
+        assert elapsed < 2.0  # should return well before timeout
+
     def test_open_scanner_parses_sources(self, mock_sane):
         mock_dev = _make_mock_dev(
             [

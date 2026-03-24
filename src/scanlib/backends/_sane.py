@@ -27,6 +27,7 @@ from .._types import (
     ScanSource,
     SourceInfo,
     check_progress,
+    wait_or_cancel,
 )
 
 # ---------------------------------------------------------------------------
@@ -639,9 +640,7 @@ def _parse_resolutions(opts: list[tuple]) -> list[int]:
                         int(constraint[2] or 1),
                     )
                     step = max(1, step)
-                    return normalize_resolutions(
-                        list(range(lo, hi + 1, step))
-                    )
+                    return normalize_resolutions(list(range(lo, hi + 1, step)))
                 return [int(v) for v in constraint if isinstance(v, (int, float))]
             break
     return []
@@ -793,11 +792,16 @@ class SaneBackend:
         _init()
         self._handles: dict[str, _SaneDevice] = {}
 
-    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+    def list_scanners(
+        self,
+        timeout: float = DISCOVERY_TIMEOUT,
+        cancel: threading.Event | None = None,
+    ) -> list[Scanner]:
         from .._mdns import browse_in_thread, extract_ip_from_uri
 
         result: list | None = None
         error: BaseException | None = None
+        done = threading.Event()
 
         def _discover():
             nonlocal result, error
@@ -805,15 +809,16 @@ class SaneBackend:
                 result = _get_devices()
             except BaseException as exc:
                 error = exc
+            finally:
+                done.set()
 
         t = threading.Thread(target=_discover, daemon=True)
         t_mdns, loc_box = browse_in_thread(timeout)
         t.start()
-        t.join(timeout)
+        if not wait_or_cancel(done, timeout, cancel):
+            return []
         t_mdns.join(timeout=0.5)
         locations = loc_box[0]
-        if t.is_alive():
-            return []
         if error is not None:
             raise error
         # Deduplicate — multiple SANE backends may claim the same

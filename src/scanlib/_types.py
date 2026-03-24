@@ -556,7 +556,11 @@ DISCOVERY_TIMEOUT = 15.0  # seconds for list_scanners()
 class ScanBackend(Protocol):
     """Interface that all platform backends must implement."""
 
-    def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]: ...
+    def list_scanners(
+        self,
+        timeout: float = DISCOVERY_TIMEOUT,
+        cancel: threading.Event | None = None,
+    ) -> list[Scanner]: ...
 
     def open_scanner(self, scanner: Scanner) -> None: ...
 
@@ -575,8 +579,25 @@ MM_PER_INCH = 25.4
 
 # Standard DPI values used by virtually all scanners.
 _STANDARD_DPIS = (
-    50, 75, 100, 150, 200, 240, 300, 400, 480, 600,
-    800, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800,
+    50,
+    75,
+    100,
+    150,
+    200,
+    240,
+    300,
+    400,
+    480,
+    600,
+    800,
+    1200,
+    1600,
+    2400,
+    3200,
+    4800,
+    6400,
+    9600,
+    12800,
 )
 
 
@@ -601,6 +622,29 @@ def check_progress(progress: Callable[[int], bool] | None, percent: int) -> None
     """Call the progress callback; raise ScanAborted if it returns False."""
     if progress is not None and progress(percent) is False:
         raise ScanAborted("Scan aborted")
+
+
+def wait_or_cancel(
+    done: threading.Event,
+    timeout: float,
+    cancel: threading.Event | None = None,
+    poll_interval: float = 0.2,
+) -> bool:
+    """Wait for *done* to be set, respecting *timeout* and *cancel*.
+
+    Returns ``True`` if *done* was set, ``False`` if the wait was
+    interrupted by timeout or cancellation.
+    """
+    elapsed = 0.0
+    while not done.is_set():
+        if cancel is not None and cancel.is_set():
+            return False
+        if elapsed >= timeout:
+            return False
+        wait = min(poll_interval, timeout - elapsed)
+        done.wait(wait)
+        elapsed += wait
+    return True
 
 
 def build_pdf(
