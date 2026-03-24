@@ -286,8 +286,12 @@ class Scanner:
     def __str__(self) -> str:
         """Human-readable scanner name suitable for UI display."""
         if self._vendor and self._model:
-            return f"{self._vendor} {self._model}"
-        return self._vendor or self._model or self._name
+            label = f"{self._vendor} {self._model}"
+        else:
+            label = self._vendor or self._model or self._name
+        if self._location:
+            return f"{label} ({self._location})"
+        return label
 
     @property
     def vendor(self) -> str | None:

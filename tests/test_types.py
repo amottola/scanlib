@@ -81,6 +81,22 @@ class TestScanner:
         assert s.vendor is None
         assert s.model is None
 
+    def test_str_with_location(self):
+        s = Scanner(
+            name="epson:usb:001",
+            vendor="Epson",
+            model="GT-S50",
+            backend="sane",
+            location="2nd Floor",
+        )
+        assert str(s) == "Epson GT-S50 (2nd Floor)"
+
+    def test_str_without_location(self):
+        s = Scanner(
+            name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane"
+        )
+        assert str(s) == "Epson GT-S50"
+
     def test_location_default_none(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
         assert s.location is None
