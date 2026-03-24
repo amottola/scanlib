@@ -1109,13 +1109,7 @@ class WiaBackend:
 
                 all_pages.extend(callback.pages)
 
-                if is_feeder:
-                    break  # Download handles all feeder pages
-                else:
-                    if options.next_page is not None and options.next_page(
-                        len(all_pages)
-                    ):
-                        continue
+                if not is_feeder:
                     break
 
             if not all_pages:

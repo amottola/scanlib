@@ -91,7 +91,7 @@ Backends yield `ScannedPage` objects containing raw pixel data (no PNG wrapper).
 ### Multi-page scanning
 
 - **Feeder**: backends loop automatically (SANE detects "no docs" error, WIA catches `WIA_ERROR_PAPER_EMPTY` exception, macOS receives all pages in one `requestScan()` with page boundaries detected by `dataStartRow` resetting to 0)
-- **Flatbed multi-page**: the `next_page` callback is called after each page; return `True` to scan another
+- **Flatbed multi-page**: `Scanner.scan_pages()` owns the `next_page` loop — each page is yielded before the callback is invoked, so the caller can preview/process the page before deciding whether to continue. Backends scan one flatbed round per call; `scan_pages()` calls the backend again if `next_page` returns `True`
 
 ### macOS memory-based transfer
 

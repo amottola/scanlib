@@ -976,8 +976,6 @@ class SaneBackend:
                 page_count += 1
 
                 if not is_feeder:
-                    if options.next_page is not None and options.next_page(page_count):
-                        continue
                     break
 
             if page_count == 0:

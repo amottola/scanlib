@@ -113,7 +113,6 @@ class ScanOptions:
     scan_area: ScanArea | None = None
     source: ScanSource | None = None
     progress: Callable[[int], bool] | None = None
-    next_page: Callable[[int], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -389,6 +388,11 @@ class Scanner:
         (via :meth:`ScannedPage.to_jpeg` / :meth:`ScannedPage.to_png`),
         reordered, or later assembled into a PDF with :func:`build_pdf`.
 
+        When *next_page* is provided and the source is not a feeder,
+        each page is **yielded before** the callback is invoked, so the
+        caller can preview or process the page before deciding whether
+        to continue scanning.
+
         Parameters are the same as :meth:`scan` except that
         *image_format* and *jpeg_quality* are not applicable here.
         """
@@ -441,9 +445,29 @@ class Scanner:
             scan_area=scan_area,
             source=source,
             progress=progress,
-            next_page=next_page,
         )
-        return self._backend_impl.scan_pages(self, options)
+        return self._scan_pages_iter(options, source, next_page)
+
+    def _scan_pages_iter(
+        self,
+        options: ScanOptions,
+        source: ScanSource | None,
+        next_page: Callable[[int], bool] | None,
+    ) -> Iterator[ScannedPage]:
+        """Generator that drives the backend and handles next_page."""
+        is_feeder = source == ScanSource.FEEDER
+        page_count = 0
+        while True:
+            for page in self._backend_impl.scan_pages(self, options):
+                yield page
+                page_count += 1
+            # Feeder: backend loops internally until empty; one call is enough.
+            # Flatbed: backend scans one round; ask next_page to continue.
+            if is_feeder:
+                break
+            if next_page is not None and next_page(page_count):
+                continue
+            break
 
     def scan(
         self,

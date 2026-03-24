@@ -820,12 +820,8 @@ class MacOSBackend:
                         )
                     )
 
-                if is_feeder:
+                if not is_feeder:
                     break
-
-                if options.next_page is not None and options.next_page(len(all_pages)):
-                    continue
-                break
 
             check_progress(options.progress, 100)
             return all_pages
