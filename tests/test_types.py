@@ -81,6 +81,16 @@ class TestScanner:
         assert s.vendor is None
         assert s.model is None
 
+    def test_location_default_none(self):
+        s = Scanner(name="test", vendor=None, model=None, backend="sane")
+        assert s.location is None
+
+    def test_location_set(self):
+        s = Scanner(
+            name="test", vendor=None, model=None, backend="sane", location="Office"
+        )
+        assert s.location == "Office"
+
     def test_sources_raises_when_not_open(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
         with pytest.raises(ScannerNotOpenError):

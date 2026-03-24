@@ -264,12 +264,14 @@ class Scanner:
         model: str | None,
         backend: str,
         *,
+        location: str | None = None,
         _backend_impl: ScanBackend | None = None,
     ) -> None:
         self._name = name
         self._vendor = vendor
         self._model = model
         self._backend = backend
+        self._location = location
         self._backend_impl = _backend_impl
         self._sources: list[SourceInfo] = []
         self._defaults: ScannerDefaults | None = None
@@ -294,6 +296,16 @@ class Scanner:
     @property
     def model(self) -> str | None:
         return self._model
+
+    @property
+    def location(self) -> str | None:
+        """Free-form location string associated with the device.
+
+        Populated from ``ICDevice.location`` on macOS, or from the mDNS
+        ``note`` TXT record on Linux/Windows.  Returns ``None`` when no
+        location is available.
+        """
+        return self._location
 
     @property
     def backend(self) -> str:

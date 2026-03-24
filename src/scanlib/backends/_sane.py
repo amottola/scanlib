@@ -792,6 +792,8 @@ class SaneBackend:
         self._handles: dict[str, _SaneDevice] = {}
 
     def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
+        from .._mdns import browse_in_thread, extract_ip_from_uri
+
         result: list | None = None
         error: BaseException | None = None
 
@@ -803,8 +805,11 @@ class SaneBackend:
                 error = exc
 
         t = threading.Thread(target=_discover, daemon=True)
+        t_mdns, loc_box = browse_in_thread(timeout)
         t.start()
         t.join(timeout)
+        t_mdns.join(timeout=0.5)
+        locations = loc_box[0]
         if t.is_alive():
             return []
         if error is not None:
@@ -832,12 +837,18 @@ class SaneBackend:
                     continue
                 if model:
                     seen_escl_models.append(model)
+            # Look up mDNS location note by IP
+            location = None
+            ip = extract_ip_from_uri(dev_info[0])
+            if ip and locations:
+                location = locations.by_ip.get(ip)
             scanners.append(
                 Scanner(
                     name=dev_info[0],
                     vendor=dev_info[1] or None,
                     model=dev_info[2] or None,
                     backend="sane",
+                    location=location,
                     _backend_impl=self,
                 )
             )

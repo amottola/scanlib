@@ -482,6 +482,7 @@ class MacOSBackend:
                 vendor=_safe_str(dev, "manufacturer"),
                 model=None,
                 backend="imagecapture",
+                location=_safe_str(dev, "location"),
             )
             for dev in delegate.scanners
         ]
