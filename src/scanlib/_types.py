@@ -284,6 +284,12 @@ class Scanner:
 
     @property
     def name(self) -> str:
+        """Platform-specific device name.
+
+        On SANE this is the device URI (e.g.
+        ``escl:http://192.168.1.5:443/eSCL``), on macOS and WIA it is
+        a human-readable display name.  Always populated.
+        """
         return self._name
 
     @property
@@ -306,28 +312,39 @@ class Scanner:
 
     @property
     def vendor(self) -> str | None:
+        """Scanner manufacturer, or ``None`` when not available.
+
+        Populated on SANE and macOS; ``None`` on WIA where WSD reports
+        the driver vendor rather than the hardware manufacturer.
+        """
         return self._vendor
 
     @property
     def model(self) -> str | None:
+        """Scanner model string, or ``None`` when not available.
+
+        Populated on SANE only; ``None`` on macOS and WIA.
+        """
         return self._model
 
     @property
     def location(self) -> str | None:
         """Free-form location string associated with the device.
 
-        Populated from ``ICDevice.location`` on macOS, or from the mDNS
-        ``note`` TXT record on Linux/Windows.  Returns ``None`` when no
-        location is available.
+        Populated from ``ICDevice.locationDescription`` on macOS, or
+        from the mDNS ``note`` TXT record on Linux/Windows.  Returns
+        ``None`` when no location is available.
         """
         return self._location
 
     @property
     def backend(self) -> str:
+        """Backend identifier: ``"sane"``, ``"imagecapture"``, or ``"wia"``."""
         return self._backend
 
     @property
     def is_open(self) -> bool:
+        """Whether a device session is currently open."""
         return self._is_open
 
     @property
