@@ -912,6 +912,11 @@ class SaneBackend:
         if dev is not None:
             dev.close()
 
+    def abort_scan(self, scanner: Scanner) -> None:
+        dev = self._handles.get(scanner.name)
+        if dev is not None:
+            dev.cancel()
+
     def scan_pages(
         self, scanner: Scanner, options: ScanOptions
     ) -> Iterator[ScannedPage]:

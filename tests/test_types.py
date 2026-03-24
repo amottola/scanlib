@@ -5,6 +5,7 @@ from scanlib._types import (
     ImageFormat,
     ScanArea,
     ScanAborted,
+    ScanError,
     ScanLibError,
     Scanner,
     ScannerDefaults,
@@ -57,6 +58,16 @@ class TestScanner:
         assert s.backend == "sane"
         assert s.is_open is False
 
+    def test_str_with_location(self):
+        s = Scanner(
+            name="epson:usb:001",
+            vendor="Epson",
+            model="GT-S50",
+            backend="sane",
+            location="2nd Floor",
+        )
+        assert str(s) == "2nd Floor"
+
     def test_str_vendor_and_model(self):
         s = Scanner(
             name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane"
@@ -82,21 +93,20 @@ class TestScanner:
         assert s.vendor is None
         assert s.model is None
 
-    def test_str_with_location(self):
-        s = Scanner(
-            name="epson:usb:001",
-            vendor="Epson",
-            model="GT-S50",
-            backend="sane",
-            location="2nd Floor",
-        )
-        assert str(s) == "Epson GT-S50 (2nd Floor)"
+    def test_id_defaults_to_name(self):
+        s = Scanner(name="escl:http://192.168.1.5/eSCL", vendor=None, model=None, backend="sane")
+        assert s.id == "escl:http://192.168.1.5/eSCL"
 
-    def test_str_without_location(self):
+    def test_id_explicit(self):
         s = Scanner(
-            name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane"
+            name="HP Officejet",
+            vendor=None,
+            model=None,
+            backend="wia",
+            scanner_id="{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\0001",
         )
-        assert str(s) == "Epson GT-S50"
+        assert s.id == "{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\0001"
+        assert s.name == "HP Officejet"
 
     def test_location_default_none(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
@@ -130,6 +140,7 @@ class TestScanner:
             {
                 "open_scanner": lambda self, s: None,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
             },
         )()
         s = Scanner(
@@ -158,6 +169,7 @@ class TestScanner:
             {
                 "open_scanner": open_scanner,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
             },
         )()
         s = Scanner(
@@ -178,6 +190,7 @@ class TestScanner:
             {
                 "open_scanner": lambda self, s: None,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
             },
         )()
         s = Scanner(
@@ -207,6 +220,7 @@ class TestScanner:
             {
                 "open_scanner": open_scanner,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
             },
         )()
         s = Scanner(
@@ -231,6 +245,7 @@ class TestScanner:
             {
                 "open_scanner": lambda self, s: None,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
             },
         )()
         s = Scanner(
@@ -575,6 +590,7 @@ class TestScanPages:
             {
                 "open_scanner": open_scanner,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
                 "scan_pages": lambda self, s, o: iter([_make_page()]),
             },
         )()
@@ -600,6 +616,7 @@ class TestScanPages:
             {
                 "open_scanner": lambda self, s: None,
                 "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
                 "scan_pages": scan_pages,
             },
         )()
@@ -647,6 +664,173 @@ class TestScanPages:
         )
         pages = list(s.scan_pages(scan_area=ScanArea(100, 200, 1000, 1500)))
         assert len(pages) == 1
+
+    def test_backend_exception_propagates_to_caller(self):
+        """Exceptions from the backend reach the caller's thread."""
+
+        def scan_pages(self, scanner, options):
+            raise ScanError("device error")
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
+                "scan_pages": scan_pages,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
+        with s:
+            with pytest.raises(ScanError, match="device error"):
+                list(s.scan_pages())
+
+    def test_backend_exception_after_yielding_propagates(self):
+        """Exception after yielding one page still reaches the caller."""
+
+        def scan_pages(self, scanner, options):
+            yield _make_page()
+            raise ScanError("mid-scan error")
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
+                "scan_pages": scan_pages,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
+        with s:
+            gen = s.scan_pages()
+            page = next(gen)
+            assert isinstance(page, ScannedPage)
+            with pytest.raises(ScanError, match="mid-scan error"):
+                next(gen)
+
+    def test_exception_during_next_page_round_propagates(self):
+        """Exception on a next_page continuation reaches the caller."""
+        call_count = [0]
+
+        def scan_pages(self, scanner, options):
+            call_count[0] += 1
+            if call_count[0] > 1:
+                raise ScanError("second round failed")
+            yield _make_page()
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
+                "scan_pages": scan_pages,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
+        with s:
+            with pytest.raises(ScanError, match="second round failed"):
+                list(s.scan_pages(next_page=lambda n: True))
+
+    def test_abort_stops_scan(self):
+        """scanner.abort() causes scan_pages to raise ScanAborted."""
+        import threading
+
+        def scan_pages(self, scanner, options):
+            # Simulate a slow scan that blocks until abort
+            scanner._abort_event.wait(timeout=5.0)
+            yield _make_page()
+
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
+                "scan_pages": scan_pages,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
+        with s:
+            # Abort from another thread after a short delay
+            threading.Timer(0.1, s.abort).start()
+            with pytest.raises(ScanAborted):
+                list(s.scan_pages())
+
+    def test_abort_safe_when_not_scanning(self):
+        """abort() does not raise when no scan is in progress."""
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
+        with s:
+            s.abort()  # should not raise
+
+    def test_abort_does_not_affect_next_scan(self):
+        """A stale abort() does not interfere with the next scan."""
+        mock_backend = type(
+            "B",
+            (),
+            {
+                "open_scanner": lambda self, s: None,
+                "close_scanner": lambda self, s: None,
+                "abort_scan": lambda self, s: None,
+                "scan_pages": lambda self, s, o: iter([_make_page()]),
+            },
+        )()
+        s = Scanner(
+            name="test",
+            vendor=None,
+            model=None,
+            backend="sane",
+            _backend_impl=mock_backend,
+        )
+        with s:
+            s.abort()
+            # Next scan should work fine
+            pages = list(s.scan_pages())
+            assert len(pages) == 1
 
 
 class TestBuildPdf:

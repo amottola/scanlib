@@ -716,10 +716,11 @@ class _TransferCallback(COMObject):
 
     _com_interfaces_ = [IWiaTransferCallback]
 
-    def __init__(self, progress_fn):
+    def __init__(self, progress_fn, abort_event=None):
         super().__init__()
         self.pages: list[ScannedPage] = []
         self._progress = progress_fn
+        self._abort_event = abort_event
         self._current_stream: int | None = None
         self._aborted = False
 
@@ -728,6 +729,9 @@ class _TransferCallback(COMObject):
         msg = params.lMessage
 
         if msg == _WIA_TRANSFER_MSG_STATUS:
+            if self._abort_event is not None and self._abort_event.is_set():
+                self._aborted = True
+                return _WIA_ERROR_PAPER_EMPTY
             try:
                 check_progress(self._progress, params.lPercentComplete)
             except ScanAborted:
@@ -885,6 +889,11 @@ class WiaBackend:
     def close_scanner(self, scanner: Scanner) -> None:
         return self._dispatch(self._close_scanner_impl, scanner)
 
+    def abort_scan(self, scanner: Scanner) -> None:
+        # Set the abort event; the transfer callback checks it and
+        # signals WIA to stop the transfer on the next progress tick.
+        scanner._abort_event.set()
+
     def scan_pages(
         self, scanner: Scanner, options: ScanOptions
     ) -> Iterator[ScannedPage]:
@@ -928,21 +937,17 @@ class WiaBackend:
                 vendor=None,
                 model=None,
                 backend="wia",
+                scanner_id=str(dev_id),
             )
-            scanner._device_id = str(dev_id)
             scanners.append(scanner)
         return scanners
 
     def _open_scanner_impl(self, scanner: Scanner) -> None:
-        dev_id = getattr(scanner, "_device_id", None)
-        if not dev_id:
-            raise ScanError(f"Scanner {scanner.name!r} has no device ID")
-
         try:
             dm = self._create_device_manager()
-            root_item = dm.CreateDevice(0, dev_id)
+            root_item = dm.CreateDevice(0, scanner.id)
         except Exception as exc:
-            raise ScanError(f"Failed to open scanner {scanner.name!r}: {exc}") from exc
+            raise ScanError(f"Failed to open scanner {scanner.id!r}: {exc}") from exc
 
         # Read device-level properties from root item
         try:
@@ -1013,15 +1018,15 @@ class WiaBackend:
             scanner._defaults = None
 
         scanner._sources = source_infos
-        self._handles[scanner.name] = (root_item, child_item)
+        self._handles[scanner.id] = (root_item, child_item)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
-        self._handles.pop(scanner.name, None)
+        self._handles.pop(scanner.id, None)
 
     def _scan_pages_impl(
         self, scanner: Scanner, options: ScanOptions
     ) -> list[ScannedPage]:
-        items = self._handles.get(scanner.name)
+        items = self._handles.get(scanner.id)
         if items is None:
             raise ScanError("Scanner is not open")
 
@@ -1086,7 +1091,7 @@ class WiaBackend:
             all_pages: list[ScannedPage] = []
 
             while True:
-                callback = _TransferCallback(options.progress)
+                callback = _TransferCallback(options.progress, scanner._abort_event)
                 try:
                     transfer.Download(0, callback)
                 except Exception as exc:

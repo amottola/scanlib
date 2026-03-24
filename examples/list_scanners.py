@@ -11,6 +11,7 @@ print(f"Found {len(scanners)} scanner(s):\n")
 
 for scanner in scanners:
     print(f"  {scanner}")
+    print(f"    ID:     {scanner.id}")
     print(f"    Name:   {scanner.name}")
     if scanner.vendor:
         print(f"    Vendor: {scanner.vendor}")

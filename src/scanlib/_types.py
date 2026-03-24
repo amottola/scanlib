@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import struct
+import threading
 import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -263,6 +264,7 @@ class Scanner:
         model: str | None,
         backend: str,
         *,
+        scanner_id: str | None = None,
         location: str | None = None,
         _backend_impl: ScanBackend | None = None,
     ) -> None:
@@ -270,11 +272,13 @@ class Scanner:
         self._vendor = vendor
         self._model = model
         self._backend = backend
+        self._id = scanner_id if scanner_id is not None else name
         self._location = location
         self._backend_impl = _backend_impl
         self._sources: list[SourceInfo] = []
         self._defaults: ScannerDefaults | None = None
         self._is_open = False
+        self._abort_event = threading.Event()
 
     # --- Read-only properties (always available) ---
 
@@ -282,15 +286,23 @@ class Scanner:
     def name(self) -> str:
         return self._name
 
+    @property
+    def id(self) -> str:
+        """Platform-opaque string that uniquely identifies this device.
+
+        Guaranteed unique across all scanners returned by a single
+        :func:`list_scanners` call.  On SANE this is the device URI,
+        on WIA the device ID, on macOS the device UUID.
+        """
+        return self._id
+
     def __str__(self) -> str:
-        """Human-readable scanner name suitable for UI display."""
-        if self._vendor and self._model:
-            label = f"{self._vendor} {self._model}"
-        else:
-            label = self._vendor or self._model or self._name
+        """Human-readable scanner label suitable for UI display."""
         if self._location:
-            return f"{label} ({self._location})"
-        return label
+            return self._location
+        if self._vendor and self._model:
+            return f"{self._vendor} {self._model}"
+        return self._vendor or self._model or self._name
 
     @property
     def vendor(self) -> str | None:
@@ -363,6 +375,18 @@ class Scanner:
         if self._is_open and self._backend_impl is not None:
             self._backend_impl.close_scanner(self)
         self._is_open = False
+
+    def abort(self) -> None:
+        """Abort an in-progress scan.
+
+        Safe to call from any thread, even when no scan is running.
+        The running :meth:`scan` or :meth:`scan_pages` call will raise
+        :class:`ScanAborted` shortly after this is called.  The event
+        is cleared automatically at the start of the next scan.
+        """
+        self._abort_event.set()
+        if self._backend_impl is not None:
+            self._backend_impl.abort_scan(self)
 
     def __enter__(self) -> Scanner:
         return self.open()
@@ -455,10 +479,13 @@ class Scanner:
         next_page: Callable[[int], bool] | None,
     ) -> Iterator[ScannedPage]:
         """Generator that drives the backend and handles next_page."""
+        self._abort_event.clear()
         is_feeder = source == ScanSource.FEEDER
         page_count = 0
         while True:
             for page in self._backend_impl.scan_pages(self, options):
+                if self._abort_event.is_set():
+                    raise ScanAborted("Scan aborted")
                 yield page
                 page_count += 1
             # Feeder: backend loops internally until empty; one call is enough.
@@ -538,6 +565,8 @@ class ScanBackend(Protocol):
     def scan_pages(
         self, scanner: Scanner, options: ScanOptions
     ) -> Iterator[ScannedPage]: ...
+
+    def abort_scan(self, scanner: Scanner) -> None: ...
 
 
 # --- Utilities ---

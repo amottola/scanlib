@@ -13,7 +13,7 @@ List available scanners and scan a document:
    # Discover scanners
    scanners = scanlib.list_scanners()
    for s in scanners:
-       print(s)  # e.g. "Epson GT-S50 (2nd Floor)"
+       print(s)  # e.g. "2nd Floor" or "HP Officejet Pro 8500"
 
    # Scan a document
    with scanners[0] as scanner:
@@ -128,6 +128,27 @@ Monitor scan progress with a callback. Return ``False`` to abort:
 
    with scanners[0] as scanner:
        doc = scanner.scan(progress=on_progress)
+
+Aborting a Scan
+---------------
+
+Call ``abort()`` from any thread to cancel an in-progress scan.  The
+running ``scan()`` or ``scan_pages()`` call will raise
+:class:`ScanAborted` shortly after:
+
+.. code-block:: python
+
+   import threading
+
+   with scanners[0] as scanner:
+       # Abort after 5 seconds from another thread
+       threading.Timer(5, scanner.abort).start()
+       try:
+           doc = scanner.scan()
+       except scanlib.ScanAborted:
+           print("Scan was cancelled")
+
+``abort()`` is safe to call even when no scan is running.
 
 Thread Safety
 -------------

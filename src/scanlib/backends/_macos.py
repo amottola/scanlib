@@ -505,6 +505,11 @@ class MacOSBackend:
         with self._lock:
             return self._call(self._close_scanner_impl, scanner)
 
+    def abort_scan(self, scanner: Scanner) -> None:
+        device = self._devices.get(scanner.id)
+        if device is not None:
+            self._on_main(device.cancelScan)
+
     def scan_pages(
         self, scanner: Scanner, options: ScanOptions
     ) -> Iterator[ScannedPage]:
@@ -522,12 +527,14 @@ class MacOSBackend:
 
         def _build_list():
             for removed_dev in delegate._removed:
-                self._devices.pop(removed_dev.name(), None)
+                uid = _safe_str(removed_dev, "UUIDString") or removed_dev.name()
+                self._devices.pop(uid, None)
             delegate._removed.clear()
 
             for dev in delegate.scanners:
-                if dev.name() not in self._devices:
-                    self._devices[dev.name()] = dev
+                uid = _safe_str(dev, "UUIDString") or dev.name()
+                if uid not in self._devices:
+                    self._devices[uid] = dev
 
             return [
                 Scanner(
@@ -535,6 +542,7 @@ class MacOSBackend:
                     vendor=_safe_str(dev, "manufacturer"),
                     model=None,
                     backend="imagecapture",
+                    scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
                     location=_safe_str(dev, "locationDescription"),
                 )
                 for dev in delegate.scanners
@@ -543,9 +551,9 @@ class MacOSBackend:
         return self._on_main(_build_list)
 
     def _open_scanner_impl(self, scanner: Scanner) -> None:
-        device = self._devices.get(scanner.name)
+        device = self._devices.get(scanner.id)
         if device is None:
-            raise ScanError(f"Scanner {scanner.name!r} not found")
+            raise ScanError(f"Scanner {scanner.id!r} not found")
 
         # Retry opening the session.  Network scanners may refuse if the
         # previous session close hasn't fully propagated yet.
@@ -578,7 +586,7 @@ class MacOSBackend:
         # Wait for functional unit types to become available (up to 5s).
         self._wait_for(device.availableFunctionalUnitTypes, timeout=5.0)
 
-        self._open_sessions.add(scanner.name)
+        self._open_sessions.add(scanner.id)
 
         # Read per-source capabilities from each functional unit.
         def _read_capabilities():
@@ -665,8 +673,8 @@ class MacOSBackend:
         scanner._defaults = self._on_main(_read_defaults, device, scanner._sources)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
-        self._open_sessions.discard(scanner.name)
-        device = self._devices.get(scanner.name)
+        self._open_sessions.discard(scanner.id)
+        device = self._devices.get(scanner.id)
         if device is None:
             return
 
@@ -682,11 +690,11 @@ class MacOSBackend:
     def _scan_pages_impl(
         self, scanner: Scanner, options: ScanOptions
     ) -> list[ScannedPage]:
-        device = self._devices.get(scanner.name)
+        device = self._devices.get(scanner.id)
         if device is None:
             raise ScanError("Scanner is not open")
 
-        if scanner.name not in self._open_sessions:
+        if scanner.id not in self._open_sessions:
             raise ScanError("Scanner is not open")
 
         # Create a fresh delegate for each scan.
@@ -784,7 +792,12 @@ class MacOSBackend:
                 check_progress(options.progress, -1)
 
                 self._on_main(device.requestScan)
-                scan_delegate._scan_done.wait(timeout=120.0)
+
+                # Poll with short timeouts so scanner.abort() is responsive.
+                while not scan_delegate._scan_done.wait(timeout=0.25):
+                    if scanner._abort_event.is_set():
+                        self._on_main(device.cancelScan)
+                        raise ScanAborted("Scan aborted")
 
                 if scan_delegate._aborted:
                     self._on_main(device.cancelScan)

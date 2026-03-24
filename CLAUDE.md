@@ -74,11 +74,12 @@ Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner ob
 
 ### Scanner lifecycle
 
-1. `list_scanners()` returns lightweight `Scanner` objects (no device session). `str(scanner)` gives a human-readable name. Each Scanner has `name` (always populated, platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA where WSD reports the driver vendor), and `model` (SANE only; None on macOS/WIA).
+1. `list_scanners()` returns lightweight `Scanner` objects (no device session). `str(scanner)` returns `location` if available, otherwise `vendor model` or `name`. Each Scanner has `id` (unique per device: device URI on SANE, UUID on macOS, WIA device ID on Windows), `name` (platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA), `model` (SANE only; None on macOS/WIA), and `location` (free-form string from mDNS `note` or macOS `locationDescription`).
 2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources` (list of `SourceInfo`) and `defaults`
 3. `scanner.scan(...)` calls `scanner.scan_pages()` which yields `ScannedPage` objects (raw pixels), then `build_pdf()` converts them into a single PDF
 4. `scanner.scan_pages(...)` yields individual `ScannedPage` objects for preview/reordering workflows
-5. `scanner.close()` releases the session
+5. `scanner.abort()` cancels an in-progress scan from any thread; raises `ScanAborted` on the scanning thread
+6. `scanner.close()` releases the session
 
 `scanner.sources` returns `list[SourceInfo]` where each `SourceInfo` bundles `type` (ScanSource), `resolutions`, `color_modes`, and `max_scan_area` for one source. `sources` and `defaults` raise `ScannerNotOpenError` if accessed before `open()`.
 
@@ -122,7 +123,7 @@ The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `
 ## Conventions
 
 - All scan areas are in 1/10 millimeters (e.g., full A4 = `ScanArea(0, 0, 2100, 2970)`)
-- Backends implement the `ScanBackend` Protocol (4 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`)
+- Backends implement the `ScanBackend` Protocol (5 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`, `abort_scan`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
 - Page encoding supports JPEG via `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux) and lossless PNG via stdlib `zlib`; pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`)
