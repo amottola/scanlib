@@ -13,7 +13,8 @@ List available scanners and scan a document:
    # Discover scanners
    scanners = scanlib.list_scanners()
    for s in scanners:
-       print(s)  # e.g. "Epson GT-S50", "HP Officejet Pro 8500"
+       loc = f" ({s.location})" if s.location else ""
+       print(f"{s}{loc}")  # e.g. "Epson GT-S50 (2nd Floor)"
 
    # Scan a document
    with scanners[0] as scanner:
