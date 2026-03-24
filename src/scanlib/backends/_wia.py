@@ -88,6 +88,9 @@ _WIA_DPS_DOCUMENT_HANDLING_SELECT = 3088
 _WIA_DPS_MAX_HORIZONTAL_SIZE = 3074
 _WIA_DPS_MAX_VERTICAL_SIZE = 3075
 
+_WIA_IPS_MAX_HORIZONTAL_SIZE = 6165
+_WIA_IPS_MAX_VERTICAL_SIZE = 6166
+
 _WIA_IPS_XRES = 6147
 _WIA_IPS_YRES = 6148
 _WIA_IPS_XPOS = 6149
@@ -157,6 +160,10 @@ _BMP_COLOR_MODE = {
 }
 
 _MM10_PER_THOUSANDTH_INCH = 0.254
+
+# Fallback max scan area: bounding box of US Letter (2159 x 2794) and A4
+# (2100 x 2970) in 1/10 mm, so it covers either paper size.
+_FALLBACK_MAX_SCAN_AREA = ScanArea(x=0, y=0, width=2159, height=2970)
 
 # ---------------------------------------------------------------------------
 # ctypes structures for OLE property access
@@ -651,15 +658,67 @@ def _read_wia_sources(storage) -> list[ScanSource]:
     return sources
 
 
-def _read_wia_max_scan_area(storage) -> ScanArea | None:
-    """Read max scan area (thousandths of inch -> 1/10mm)."""
-    max_h = _read_prop(storage, _WIA_DPS_MAX_HORIZONTAL_SIZE)
-    max_v = _read_prop(storage, _WIA_DPS_MAX_VERTICAL_SIZE)
-    if max_h is not None and max_v is not None:
-        width = math.ceil(int(max_h) * _MM10_PER_THOUSANDTH_INCH)
-        height = math.ceil(int(max_v) * _MM10_PER_THOUSANDTH_INCH)
-        return ScanArea(x=0, y=0, width=width, height=height)
-    return None
+def _read_wia_max_scan_area(root_storage, item_storage=None) -> ScanArea:
+    """Read max scan area (thousandths of inch -> 1/10mm).
+
+    Tries four sources in order:
+    1. Item-level WIA_IPS_MAX_HORIZONTAL/VERTICAL_SIZE (WIA 2.0)
+    2. Device-level WIA_DPS_MAX_HORIZONTAL/VERTICAL_SIZE (WIA 1.0)
+    3. Derived from XEXTENT/YEXTENT range max + current resolution
+    4. Fallback: bounding box of US Letter and A4
+    """
+    # 1. Item-level max size properties (WIA 2.0)
+    if item_storage is not None:
+        max_h = _read_prop(item_storage, _WIA_IPS_MAX_HORIZONTAL_SIZE)
+        max_v = _read_prop(item_storage, _WIA_IPS_MAX_VERTICAL_SIZE)
+        if max_h is not None and max_v is not None:
+            width = math.ceil(int(max_h) * _MM10_PER_THOUSANDTH_INCH)
+            height = math.ceil(int(max_v) * _MM10_PER_THOUSANDTH_INCH)
+            return ScanArea(x=0, y=0, width=width, height=height)
+
+    # 2. Device-level max size properties (WIA 1.0)
+    if root_storage is not None:
+        max_h = _read_prop(root_storage, _WIA_DPS_MAX_HORIZONTAL_SIZE)
+        max_v = _read_prop(root_storage, _WIA_DPS_MAX_VERTICAL_SIZE)
+        if max_h is not None and max_v is not None:
+            width = math.ceil(int(max_h) * _MM10_PER_THOUSANDTH_INCH)
+            height = math.ceil(int(max_v) * _MM10_PER_THOUSANDTH_INCH)
+            return ScanArea(x=0, y=0, width=width, height=height)
+
+    # 3. Derive from XEXTENT/YEXTENT range max + resolution
+    if item_storage is not None:
+        try:
+            xres = _read_prop(item_storage, _WIA_IPS_XRES)
+            yres = _read_prop(item_storage, _WIA_IPS_YRES)
+            if xres is not None and yres is not None:
+                xres, yres = int(xres), int(yres)
+                if xres > 0 and yres > 0:
+                    x_flags, x_vals = _read_prop_attributes(
+                        item_storage, _WIA_IPS_XEXTENT
+                    )
+                    y_flags, y_vals = _read_prop_attributes(
+                        item_storage, _WIA_IPS_YEXTENT
+                    )
+                    x_max = None
+                    y_max = None
+                    if x_flags & _WIA_PROP_RANGE and len(x_vals) >= 2:
+                        x_max = x_vals[1]  # [min, max, step]
+                    elif x_flags & _WIA_PROP_LIST and len(x_vals) > 2:
+                        x_max = max(x_vals[2:])
+                    if y_flags & _WIA_PROP_RANGE and len(y_vals) >= 2:
+                        y_max = y_vals[1]
+                    elif y_flags & _WIA_PROP_LIST and len(y_vals) > 2:
+                        y_max = max(y_vals[2:])
+                    if x_max is not None and y_max is not None:
+                        # Convert pixels to 1/10mm: pixels / dpi * 25.4 * 10
+                        width = math.ceil(x_max / xres * 254)
+                        height = math.ceil(y_max / yres * 254)
+                        return ScanArea(x=0, y=0, width=width, height=height)
+        except Exception:
+            pass
+
+    # 4. Fallback: bounding box of US Letter and A4
+    return _FALLBACK_MAX_SCAN_AREA
 
 
 def _read_wia_defaults(storage, sources: list[ScanSource]) -> ScannerDefaults | None:
@@ -961,10 +1020,8 @@ class WiaBackend:
             root_storage = None
 
         source_types: list[ScanSource] = []
-        device_area: ScanArea | None = None
         if root_storage is not None:
             source_types = _read_wia_sources(root_storage)
-            device_area = _read_wia_max_scan_area(root_storage)
         if not source_types:
             source_types = [ScanSource.FLATBED]
 
@@ -982,6 +1039,7 @@ class WiaBackend:
         if child_item is not None:
             try:
                 item_storage = child_item.QueryInterface(IWiaPropertyStorage)
+                device_area = _read_wia_max_scan_area(root_storage, item_storage)
 
                 # Read per-source resolutions and color modes.
                 for source in source_types:
@@ -1011,6 +1069,7 @@ class WiaBackend:
                 scanner._defaults = None
         else:
             # No child item — build SourceInfo with device-level area only
+            device_area = _read_wia_max_scan_area(root_storage)
             for source in source_types:
                 source_infos.append(
                     SourceInfo(

@@ -214,3 +214,108 @@ class TestWiaBackend:
 
         with pytest.raises(ScanError, match="not open"):
             list(backend.scan_pages(scanners[0], ScanOptions()))
+
+
+class TestReadWiaMaxScanArea:
+    """Unit tests for _read_wia_max_scan_area fallback chain."""
+
+    def _get_fn(self):
+        from scanlib.backends._wia import _read_wia_max_scan_area
+
+        return _read_wia_max_scan_area
+
+    def test_item_level_properties_preferred(self):
+        """WIA 2.0 item-level props (6165/6166) take priority."""
+        fn = self._get_fn()
+        root = mock.MagicMock()
+        item = mock.MagicMock()
+
+        def item_read(storage, prop_id, default=None):
+            # WIA_IPS_MAX_HORIZONTAL_SIZE / VERTICAL_SIZE
+            if prop_id == 6165:
+                return 8500  # thousandths of inch
+            if prop_id == 6166:
+                return 11000
+            return default
+
+        with mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=item_read):
+            area = fn(root, item)
+
+        assert area is not None
+        assert area.x == 0
+        assert area.y == 0
+        assert area.width > 0
+        assert area.height > 0
+
+    def test_device_level_fallback(self):
+        """Falls back to WIA 1.0 device-level props (3074/3075)."""
+        fn = self._get_fn()
+        root = mock.MagicMock()
+        item = mock.MagicMock()
+
+        def read_prop(storage, prop_id, default=None):
+            # Item-level returns None; device-level returns values
+            if prop_id == 3074:
+                return 8500
+            if prop_id == 3075:
+                return 11693
+            return default
+
+        with mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=read_prop):
+            with mock.patch(
+                f"{_WIA_MODULE}._read_prop_attributes", return_value=(0, [])
+            ):
+                area = fn(root, item)
+
+        assert area is not None
+        assert area.width > 0
+        assert area.height > 0
+
+    def test_extent_derived_fallback(self):
+        """Derives area from XEXTENT/YEXTENT range + resolution."""
+        fn = self._get_fn()
+        root = mock.MagicMock()
+        item = mock.MagicMock()
+
+        _WIA_IPS_XRES = 6147
+        _WIA_IPS_XEXTENT = 6151
+        _WIA_IPS_YEXTENT = 6152
+        _WIA_PROP_RANGE = 0x10
+
+        def read_prop(storage, prop_id, default=None):
+            if prop_id == _WIA_IPS_XRES:
+                return 300
+            if prop_id == 6148:  # YRES
+                return 300
+            return default
+
+        def read_attrs(storage, prop_id):
+            if prop_id == _WIA_IPS_XEXTENT:
+                return (_WIA_PROP_RANGE, [1, 2550, 1])  # min, max, step
+            if prop_id == _WIA_IPS_YEXTENT:
+                return (_WIA_PROP_RANGE, [1, 3510, 1])
+            return (0, [])
+
+        with mock.patch(f"{_WIA_MODULE}._read_prop", side_effect=read_prop):
+            with mock.patch(
+                f"{_WIA_MODULE}._read_prop_attributes", side_effect=read_attrs
+            ):
+                area = fn(root, item)
+
+        assert area is not None
+        # 2550px / 300dpi * 254 = 2159
+        assert area.width == 2159
+        # 3510px / 300dpi * 254 = 2972 (ceil)
+        assert area.height == 2972
+
+    def test_fallback_to_letter_a4_bounding_box(self):
+        """Returns Letter/A4 bounding box when no properties available."""
+        fn = self._get_fn()
+
+        with mock.patch(f"{_WIA_MODULE}._read_prop", return_value=None):
+            with mock.patch(
+                f"{_WIA_MODULE}._read_prop_attributes", return_value=(0, [])
+            ):
+                area = fn(None, None)
+
+        assert area == ScanArea(x=0, y=0, width=2159, height=2970)

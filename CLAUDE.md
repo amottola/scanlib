@@ -118,6 +118,8 @@ Key interfaces:
 
 Transfer flow: `Download()` blocks while invoking `GetNextStream` (once per page) and `TransferCallback` (progress + end-of-stream signals). On `END_OF_STREAM`, the BMP data is read from the `IStream` via `GetHGlobalFromStream` and converted to raw pixels using `_bmp_to_raw` from the C accelerator extension. BMP format is used for maximum device compatibility.
 
+Max scan area is determined via a 4-level fallback chain in `_read_wia_max_scan_area`: (1) WIA 2.0 item-level `WIA_IPS_MAX_HORIZONTAL/VERTICAL_SIZE`, (2) WIA 1.0 device-level `WIA_DPS_MAX_HORIZONTAL/VERTICAL_SIZE`, (3) derived from `XEXTENT`/`YEXTENT` property range max + current resolution, (4) fallback to the bounding box of US Letter and A4 (2159 x 2970 in 1/10 mm). This ensures `max_scan_area` is always populated.
+
 The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `ctypes.windll`) with try/except and provides stubs so it can be imported on non-Windows for testing.
 
 ## Conventions
