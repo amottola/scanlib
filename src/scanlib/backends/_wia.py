@@ -605,12 +605,12 @@ def _read_prop_attributes(storage, prop_id: int) -> tuple[int, list[int]]:
 
 def _read_wia_resolutions(storage) -> list[int]:
     """Read supported DPI values."""
+    from .._types import normalize_resolutions
+
     flags, values = _read_prop_attributes(storage, _WIA_IPS_XRES)
     if flags & _WIA_PROP_RANGE and len(values) >= 3:
         lo, hi, step = values[0], values[1], max(1, values[2])
-        if (hi - lo) // step <= 1000:
-            return list(range(lo, hi + 1, step))
-        return list(range(lo, hi + 1, (hi - lo) // 20))
+        return normalize_resolutions(list(range(lo, hi + 1, step)))
     if flags & _WIA_PROP_LIST and len(values) > 2:
         # WIA list format: [count, nominal, value1, value2, ...]
         return sorted(values[2:])

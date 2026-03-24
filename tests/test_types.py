@@ -15,6 +15,7 @@ from scanlib._types import (
     ScannedPage,
     SourceInfo,
     build_pdf,
+    normalize_resolutions,
 )
 
 
@@ -247,6 +248,48 @@ class TestScanner:
     def test_repr(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
         assert "closed" in repr(s)
+
+
+class TestNormalizeResolutions:
+    def test_short_list_unchanged(self):
+        """Lists with ≤30 entries are returned as-is."""
+        dpis = [75, 150, 300, 600, 1200]
+        assert normalize_resolutions(dpis) == dpis
+
+    def test_range_expansion_normalized(self):
+        """A range like 75–1200 step 1 is snapped to standard DPIs."""
+        huge = list(range(75, 1201))
+        result = normalize_resolutions(huge)
+        assert 75 in result
+        assert 300 in result
+        assert 600 in result
+        assert 1200 in result
+        assert len(result) < 30
+
+    def test_no_intermediate_values(self):
+        """Non-standard DPIs like 76, 301, etc. are excluded."""
+        huge = list(range(75, 1201))
+        result = normalize_resolutions(huge)
+        assert 76 not in result
+        assert 301 not in result
+
+    def test_narrow_range(self):
+        """A narrow range still returns the standard DPIs within it."""
+        dpis = list(range(200, 401))
+        result = normalize_resolutions(dpis)
+        assert result == [200, 240, 300, 400]
+
+    def test_empty_list(self):
+        assert normalize_resolutions([]) == []
+
+    def test_single_value(self):
+        assert normalize_resolutions([300]) == [300]
+
+    def test_thirty_entries_unchanged(self):
+        """Exactly 30 entries — treated as discrete, not normalized."""
+        dpis = list(range(100, 130))
+        assert normalize_resolutions(dpis) == dpis
+
 
 
 class TestScanOptions:

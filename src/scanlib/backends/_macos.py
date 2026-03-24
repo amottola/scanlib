@@ -18,6 +18,7 @@ from .._types import (
     DISCOVERY_TIMEOUT,
     MM_PER_INCH,
     ColorMode,
+    normalize_resolutions,
     FeederEmptyError,
     ScanArea,
     ScanAborted,
@@ -283,7 +284,7 @@ def _read_resolutions(device: object) -> list[int]:
         while idx != 2**63 - 1:  # NSNotFound
             resolutions.append(int(idx))
             idx = supported.indexGreaterThanIndex_(idx)
-        return sorted(resolutions)
+        return normalize_resolutions(sorted(resolutions))
     except Exception:
         return []
 
@@ -534,7 +535,7 @@ class MacOSBackend:
                     vendor=_safe_str(dev, "manufacturer"),
                     model=None,
                     backend="imagecapture",
-                    location=_safe_str(dev, "location"),
+                    location=_safe_str(dev, "locationDescription"),
                 )
                 for dev in delegate.scanners
             ]

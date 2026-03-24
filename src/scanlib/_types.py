@@ -520,6 +520,29 @@ class ScanBackend(Protocol):
 
 MM_PER_INCH = 25.4
 
+# Standard DPI values used by virtually all scanners.
+_STANDARD_DPIS = (
+    50, 75, 100, 150, 200, 240, 300, 400, 480, 600,
+    800, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800,
+)
+
+
+def normalize_resolutions(resolutions: list[int]) -> list[int]:
+    """Reduce a resolution list to standard DPI values when it looks
+    like a range expansion (many values with small increments).
+
+    Backends that report a continuous range (e.g. 75–1200 step 1)
+    produce huge lists that are unwieldy for UI display and not what
+    users expect.  This keeps only the standard DPI values that fall
+    within the reported range.  Short lists (≤ 30 entries) that already
+    look like discrete values are returned unchanged.
+    """
+    if len(resolutions) <= 30:
+        return resolutions
+    lo, hi = resolutions[0], resolutions[-1]
+    snapped = [d for d in _STANDARD_DPIS if lo <= d <= hi]
+    return snapped or resolutions
+
 
 def check_progress(progress: Callable[[int], bool] | None, percent: int) -> None:
     """Call the progress callback; raise ScanAborted if it returns False."""

@@ -626,6 +626,8 @@ def _parse_max_scan_area(opts: list[tuple]) -> ScanArea | None:
 
 def _parse_resolutions(opts: list[tuple]) -> list[int]:
     """Extract supported resolutions from SANE option descriptors."""
+    from .._types import normalize_resolutions
+
     for opt in opts:
         if opt[0] == "resolution":
             constraint = opt[7]
@@ -637,9 +639,9 @@ def _parse_resolutions(opts: list[tuple]) -> list[int]:
                         int(constraint[2] or 1),
                     )
                     step = max(1, step)
-                    if (hi - lo) // step <= 1000:
-                        return list(range(lo, hi + 1, step))
-                    return list(range(lo, hi + 1, (hi - lo) // 20))
+                    return normalize_resolutions(
+                        list(range(lo, hi + 1, step))
+                    )
                 return [int(v) for v in constraint if isinstance(v, (int, float))]
             break
     return []
