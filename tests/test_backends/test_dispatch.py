@@ -90,19 +90,19 @@ class TestWiaDispatch:
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS only")
 class TestMacOSDispatch:
-    """Test MacOSBackend._call dispatches correctly by thread."""
+    """Test MacOSBackend._call and _on_main dispatch correctly."""
 
     def _make_backend(self):
         from scanlib.backends._macos import MacOSBackend
 
         return MacOSBackend()
 
-    def test_call_runs_directly_on_main_thread(self):
-        """When called from the main thread, _call invokes directly."""
+    def test_call_runs_on_worker_thread(self):
+        """_call always runs func on a worker thread, never on main."""
         assert threading.current_thread() is threading.main_thread()
         backend = self._make_backend()
         exec_thread = backend._call(lambda: threading.current_thread())
-        assert exec_thread is threading.main_thread()
+        assert exec_thread is not threading.main_thread()
 
     def test_call_returns_value_on_main_thread(self):
         backend = self._make_backend()
@@ -120,31 +120,29 @@ class TestMacOSDispatch:
             backend._call(lambda: (_ for _ in ()).throw(ValueError("test error")))
 
     def test_lock_serialises_access(self):
-        """Verify that the lock prevents concurrent access."""
+        """Verify that the lock prevents concurrent _call invocations."""
         backend = self._make_backend()
         assert not backend._lock.locked()
 
-        # Acquire the lock manually and verify _call blocks
+        # Acquire the lock manually and verify a locked _call blocks
         backend._lock.acquire()
         entered = threading.Event()
         result_box = {}
 
-        def try_call():
-            # This should block on the lock
+        def try_locked_call():
             entered.set()
-            result_box["value"] = backend._call(lambda: "done")
+            with backend._lock:
+                result_box["value"] = backend._call(lambda: "done")
 
-        t = threading.Thread(target=try_call)
+        t = threading.Thread(target=try_locked_call)
         t.start()
         # Wait for the thread to start; it should be blocked on the lock
         entered.wait(timeout=2)
         # Give it a moment to actually hit the lock
         t.join(timeout=0.1)
-        # Thread should still be alive (blocked)
+        # Thread should still be alive (blocked on lock)
         assert t.is_alive()
 
-        # Release the lock — but the background thread will then try
-        # performSelectorOnMainThread which needs a run loop. Since we're
-        # testing the lock, just verify it was blocking and clean up.
+        # Release the lock — the background thread will proceed.
         backend._lock.release()
         t.join(timeout=5)

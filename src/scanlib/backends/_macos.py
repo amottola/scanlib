@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from collections.abc import Iterator
 
 import ImageCaptureCore
@@ -72,7 +73,7 @@ class _BrowserDelegate(NSObject):
         if self is None:
             return None
         self.scanners = []
-        self._done = False
+        self._done = threading.Event()
         self._removed = []
         return self
 
@@ -80,7 +81,7 @@ class _BrowserDelegate(NSObject):
         if device.type() & ImageCaptureCore.ICDeviceTypeMaskScanner:
             self.scanners.append(device)
         if not moreComing:
-            self._done = True
+            self._done.set()
 
     def deviceBrowser_didRemoveDevice_moreGoing_(self, browser, device, moreGoing):
         self._removed.append(device)
@@ -89,9 +90,9 @@ class _BrowserDelegate(NSObject):
 class _ScanDelegate(NSObject):
     """Delegate for ICScannerDevice — a fresh instance is created per phase.
 
-    Open phase uses ``_session_open``; close phase uses ``_session_closed``;
+    Open phase uses ``_open_event``; close phase uses ``_closed_event``;
     scan phase accumulates band data via ``scannerDevice:didScanToBandData:``
-    and signals completion through ``_done``.
+    and signals completion through ``_scan_done``.
     """
 
     def init(self):
@@ -110,9 +111,12 @@ class _ScanDelegate(NSObject):
         self._progress = None
         self._last_pct = 0
         self.error = None
-        self._done = False
-        self._session_open = False
-        self._session_closed = False
+        self.session_open = False
+        self._aborted = False
+        # Threading events for cross-thread signaling
+        self._open_event = threading.Event()
+        self._scan_done = threading.Event()
+        self._closed_event = threading.Event()
         return self
 
     def _finish_page(self) -> None:
@@ -131,9 +135,9 @@ class _ScanDelegate(NSObject):
     def device_didOpenSessionWithError_(self, device, error):
         if error:
             self.error = str(error)
-            self._done = True
         else:
-            self._session_open = True
+            self.session_open = True
+        self._open_event.set()
 
     def scannerDevice_didScanToBandData_(self, device, data):
         start_row = data.dataStartRow()
@@ -157,16 +161,21 @@ class _ScanDelegate(NSObject):
         if self._expected_height > 0 and self._progress is not None:
             pct = min(self._rows_received * 99 // self._expected_height, 99)
             if pct > self._last_pct:
-                check_progress(self._progress, pct)
+                try:
+                    check_progress(self._progress, pct)
+                except ScanAborted:
+                    self._aborted = True
+                    self._scan_done.set()
+                    return
                 self._last_pct = pct
 
     def scannerDevice_didCompleteScanWithError_(self, device, error):
         if error:
             self.error = str(error)
-        self._done = True
+        self._scan_done.set()
 
     def device_didCloseSessionWithError_(self, device, error):
-        self._session_closed = True
+        self._closed_event.set()
 
     def device_didReceiveStatusInformation_(self, device, info):
         pass
@@ -232,25 +241,6 @@ def _assemble_image(
             )
 
     return raw_pixels, width, height, mode
-
-
-def _run_until(
-    done_flag,
-    timeout: float,
-) -> None:
-    """Spin the current NSRunLoop until *done_flag._done* is True or *timeout* elapses."""
-    run_loop = NSRunLoop.currentRunLoop()
-    deadline = NSDate.dateWithTimeIntervalSinceNow_(timeout)
-    # Report indeterminate progress once before waiting for band data.
-    progress = getattr(done_flag, "_progress", None)
-    if progress is not None:
-        check_progress(progress, -1)
-    while not done_flag._done:
-        if NSDate.date().compare_(deadline) != -1:  # NSOrderedAscending = -1
-            break
-        run_loop.runMode_beforeDate_(
-            NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.1)
-        )
 
 
 def _scan_area_from_fu(fu: object) -> ScanArea | None:
@@ -386,9 +376,12 @@ def _safe_str(dev, attr: str) -> str | None:
 class MacOSBackend:
     """macOS scanning backend using ImageCaptureCore.
 
-    Thread-safe: a lock serialises access and calls from background
-    threads are forwarded to the main thread via
-    ``performSelectorOnMainThread:withObject:waitUntilDone:``.
+    Thread-safe: a lock serialises access.  All work runs on a background
+    worker thread; individual ImageCaptureCore calls are dispatched to
+    the main thread via ``performSelectorOnMainThread:`` and return
+    quickly.  Delegate callbacks arrive on the main thread and signal
+    ``threading.Event`` objects that the worker waits on, so the main
+    thread is never blocked for more than a few milliseconds at a time.
     """
 
     def __init__(self) -> None:
@@ -398,27 +391,15 @@ class MacOSBackend:
         self._browser_delegate = None
         self._lock = threading.Lock()
 
-    def _ensure_browser(self) -> _BrowserDelegate:
-        """Start the device browser if not already running."""
-        if self._browser is not None:
-            return self._browser_delegate
+    # --- Main-thread dispatch helpers ---
 
-        delegate = _BrowserDelegate.alloc().init()
-        browser = ImageCaptureCore.ICDeviceBrowser.alloc().init()
-        browser.setDelegate_(delegate)
-        browser.setBrowsedDeviceTypeMask_(
-            ImageCaptureCore.ICDeviceTypeMaskScanner
-            | ImageCaptureCore.ICDeviceLocationTypeMaskLocal
-            | ImageCaptureCore.ICDeviceLocationTypeMaskRemote
-        )
-        browser.start()
+    def _on_main(self, func, *args):
+        """Execute *func* on the main thread, blocking until done.
 
-        self._browser = browser
-        self._browser_delegate = delegate
-        return delegate
-
-    def _call(self, func, *args):
-        """Execute *func* on the main thread, blocking until done."""
+        Individual ICC API calls are short (they just enqueue work),
+        so this returns quickly and does not block the main thread
+        for an extended period.
+        """
         if threading.current_thread() is threading.main_thread():
             return func(*args)
 
@@ -437,6 +418,76 @@ class MacOSBackend:
         if invoker.error is not None:
             raise invoker.error
         return invoker.result
+
+    def _call(self, func, *args):
+        """Run *func* on a worker thread; block the caller until done.
+
+        If called from the main thread, the NSRunLoop is pumped while
+        waiting so that ICC delegate callbacks (and GUI events) continue
+        to be processed.  If called from a background thread, the caller
+        simply blocks on a ``threading.Event``.
+        """
+        box: dict = {}
+        done = threading.Event()
+
+        def _worker():
+            try:
+                box["value"] = func(*args)
+            except BaseException as exc:
+                box["error"] = exc
+            done.set()
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+        if threading.current_thread() is threading.main_thread():
+            run_loop = NSRunLoop.currentRunLoop()
+            while not done.is_set():
+                run_loop.runMode_beforeDate_(
+                    NSDefaultRunLoopMode,
+                    NSDate.dateWithTimeIntervalSinceNow_(0.05),
+                )
+        else:
+            done.wait()
+
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
+
+    # --- Polling helpers ---
+
+    def _wait_for(self, predicate, timeout: float, interval: float = 0.1):
+        """Poll *predicate* (via ``_on_main``) until truthy or *timeout*."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            result = self._on_main(predicate)
+            if result:
+                return result
+            time.sleep(interval)
+        return None
+
+    # --- Browser management ---
+
+    def _ensure_browser(self) -> _BrowserDelegate:
+        """Start the device browser if not already running.  Must run on main thread."""
+        if self._browser is not None:
+            return self._browser_delegate
+
+        delegate = _BrowserDelegate.alloc().init()
+        browser = ImageCaptureCore.ICDeviceBrowser.alloc().init()
+        browser.setDelegate_(delegate)
+        browser.setBrowsedDeviceTypeMask_(
+            ImageCaptureCore.ICDeviceTypeMaskScanner
+            | ImageCaptureCore.ICDeviceLocationTypeMaskLocal
+            | ImageCaptureCore.ICDeviceLocationTypeMaskRemote
+        )
+        browser.start()
+
+        self._browser = browser
+        self._browser_delegate = delegate
+        return delegate
+
+    # --- Public ScanBackend protocol ---
 
     def list_scanners(self, timeout: float = DISCOVERY_TIMEOUT) -> list[Scanner]:
         with self._lock:
@@ -460,182 +511,172 @@ class MacOSBackend:
             pages = self._call(self._scan_pages_impl, scanner, options)
         yield from pages
 
+    # --- Implementation (runs on worker thread) ---
+
     def _list_scanners_impl(self, timeout: float) -> list[Scanner]:
-        delegate = self._ensure_browser()
+        delegate = self._on_main(self._ensure_browser)
 
-        if not delegate._done:
-            _run_until(delegate, timeout=timeout)
+        if not delegate._done.is_set():
+            delegate._done.wait(timeout=timeout)
 
-        # Purge removed devices
-        for removed_dev in delegate._removed:
-            self._devices.pop(removed_dev.name(), None)
-        delegate._removed.clear()
+        def _build_list():
+            for removed_dev in delegate._removed:
+                self._devices.pop(removed_dev.name(), None)
+            delegate._removed.clear()
 
-        # Build scanner list from current devices
-        for dev in delegate.scanners:
-            if dev.name() not in self._devices:
-                self._devices[dev.name()] = dev
+            for dev in delegate.scanners:
+                if dev.name() not in self._devices:
+                    self._devices[dev.name()] = dev
 
-        return [
-            Scanner(
-                name=dev.name(),
-                vendor=_safe_str(dev, "manufacturer"),
-                model=None,
-                backend="imagecapture",
-                location=_safe_str(dev, "location"),
-            )
-            for dev in delegate.scanners
-        ]
+            return [
+                Scanner(
+                    name=dev.name(),
+                    vendor=_safe_str(dev, "manufacturer"),
+                    model=None,
+                    backend="imagecapture",
+                    location=_safe_str(dev, "location"),
+                )
+                for dev in delegate.scanners
+            ]
+
+        return self._on_main(_build_list)
 
     def _open_scanner_impl(self, scanner: Scanner) -> None:
         device = self._devices.get(scanner.name)
         if device is None:
             raise ScanError(f"Scanner {scanner.name!r} not found")
 
-        run_loop = NSRunLoop.currentRunLoop()
-
         # Retry opening the session.  Network scanners may refuse if the
         # previous session close hasn't fully propagated yet.
         last_error = None
+        scan_delegate = None
         for _attempt in range(3):
-            scan_delegate = _ScanDelegate.alloc().init()
-            device.setDelegate_(scan_delegate)
-            device.requestOpenSession()
 
-            open_deadline = NSDate.dateWithTimeIntervalSinceNow_(10.0)
-            while not scan_delegate._session_open:
-                if scan_delegate._done:  # error during open
-                    break
-                if open_deadline.timeIntervalSinceNow() <= 0:
-                    break
-                run_loop.runMode_beforeDate_(
-                    NSDefaultRunLoopMode,
-                    NSDate.dateWithTimeIntervalSinceNow_(0.1),
-                )
+            def _request_open():
+                d = _ScanDelegate.alloc().init()
+                device.setDelegate_(d)
+                device.requestOpenSession()
+                return d
 
-            if scan_delegate._session_open:
-                last_error = None
-                break
+            scan_delegate = self._on_main(_request_open)
+
+            if scan_delegate._open_event.wait(timeout=10.0):
+                if scan_delegate.session_open:
+                    last_error = None
+                    break
 
             last_error = scan_delegate.error
-            # Spin the run loop briefly before retrying
-            run_loop.runMode_beforeDate_(
-                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(2.0)
-            )
+            time.sleep(2.0)
 
         if last_error:
             raise ScanError(f"Failed to open device session: {last_error}")
 
-        if not scan_delegate._session_open:
+        if scan_delegate is None or not scan_delegate.session_open:
             raise ScanError("Timed out waiting for device session to open")
 
         # Wait for functional unit types to become available (up to 5s).
-        func_deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
-        while not device.availableFunctionalUnitTypes():
-            if func_deadline.timeIntervalSinceNow() <= 0:
-                break
-            run_loop.runMode_beforeDate_(
-                NSDefaultRunLoopMode,
-                NSDate.dateWithTimeIntervalSinceNow_(0.1),
-            )
+        self._wait_for(device.availableFunctionalUnitTypes, timeout=5.0)
 
         self._open_sessions.add(scanner.name)
-        source_types = _read_sources_from_device(device)
 
         # Read per-source capabilities from each functional unit.
-        remaining_sources = set(source_types)
-        source_infos: dict[ScanSource, SourceInfo] = {}
-        try:
-            fu = device.selectedFunctionalUnit()
-            if fu is not None:
-                fu_source = _ICC_SOURCE_MAP.get(fu.type())
-                if fu_source is not None and fu_source in remaining_sources:
-                    source_infos[fu_source] = SourceInfo(
-                        type=fu_source,
-                        resolutions=_read_resolutions(device),
-                        color_modes=_read_color_modes_from_fu(fu),
-                        max_scan_area=_scan_area_from_fu(fu),
-                    )
-                    remaining_sources.discard(fu_source)
-        except Exception:
-            pass
+        def _read_capabilities():
+            source_types = _read_sources_from_device(device)
+            remaining_sources = set(source_types)
+            source_infos: dict[ScanSource, SourceInfo] = {}
 
-        original_fu_type = None
-        try:
-            fu = device.selectedFunctionalUnit()
-            if fu is not None:
-                original_fu_type = fu.type()
-        except Exception:
-            pass
-
-        for source in remaining_sources:
             try:
-                icc_type = _SCAN_SOURCE_TO_ICC.get(source)
-                if icc_type is None:
-                    continue
-                device.requestSelectFunctionalUnit_(icc_type)
-                deadline = NSDate.dateWithTimeIntervalSinceNow_(1.0)
-                while True:
-                    fu = device.selectedFunctionalUnit()
-                    if fu is not None and fu.type() == icc_type:
-                        break
-                    if deadline.timeIntervalSinceNow() <= 0:
-                        break
-                    run_loop.runMode_beforeDate_(
-                        NSDefaultRunLoopMode,
-                        NSDate.dateWithTimeIntervalSinceNow_(0.1),
-                    )
                 fu = device.selectedFunctionalUnit()
-                if fu is not None and fu.type() == icc_type:
-                    source_infos[source] = SourceInfo(
-                        type=source,
-                        resolutions=_read_resolutions(device),
-                        color_modes=_read_color_modes_from_fu(fu),
-                        max_scan_area=_scan_area_from_fu(fu),
-                    )
+                if fu is not None:
+                    fu_source = _ICC_SOURCE_MAP.get(fu.type())
+                    if fu_source is not None and fu_source in remaining_sources:
+                        source_infos[fu_source] = SourceInfo(
+                            type=fu_source,
+                            resolutions=_read_resolutions(device),
+                            color_modes=_read_color_modes_from_fu(fu),
+                            max_scan_area=_scan_area_from_fu(fu),
+                        )
+                        remaining_sources.discard(fu_source)
             except Exception:
                 pass
+
+            original_fu_type = None
+            try:
+                fu = device.selectedFunctionalUnit()
+                if fu is not None:
+                    original_fu_type = fu.type()
+            except Exception:
+                pass
+
+            return source_types, remaining_sources, source_infos, original_fu_type
+
+        source_types, remaining, source_infos, original_fu_type = self._on_main(
+            _read_capabilities
+        )
+
+        # Switch to remaining functional units and read their capabilities.
+        for source in remaining:
+            icc_type = _SCAN_SOURCE_TO_ICC.get(source)
+            if icc_type is None:
+                continue
+            self._on_main(device.requestSelectFunctionalUnit_, icc_type)
+
+            def _check_fu_selected(expected=icc_type):
+                fu = device.selectedFunctionalUnit()
+                return fu is not None and fu.type() == expected
+
+            if not self._wait_for(_check_fu_selected, timeout=1.0):
+                continue
+
+            def _read_fu_caps(src=source):
+                fu = device.selectedFunctionalUnit()
+                if fu is None:
+                    return None
+                return SourceInfo(
+                    type=src,
+                    resolutions=_read_resolutions(device),
+                    color_modes=_read_color_modes_from_fu(fu),
+                    max_scan_area=_scan_area_from_fu(fu),
+                )
+
+            si = self._on_main(_read_fu_caps)
+            if si is not None:
+                source_infos[source] = si
 
         # Restore the original functional unit.
         if original_fu_type is not None:
-            try:
+
+            def _needs_restore():
                 fu = device.selectedFunctionalUnit()
-                if fu is None or fu.type() != original_fu_type:
-                    device.requestSelectFunctionalUnit_(original_fu_type)
-                    deadline = NSDate.dateWithTimeIntervalSinceNow_(1.0)
-                    while True:
-                        fu = device.selectedFunctionalUnit()
-                        if fu is not None and fu.type() == original_fu_type:
-                            break
-                        if deadline.timeIntervalSinceNow() <= 0:
-                            break
-                        run_loop.runMode_beforeDate_(
-                            NSDefaultRunLoopMode,
-                            NSDate.dateWithTimeIntervalSinceNow_(0.1),
-                        )
-            except Exception:
-                pass
+                return fu is None or fu.type() != original_fu_type
+
+            if self._on_main(_needs_restore):
+                self._on_main(device.requestSelectFunctionalUnit_, original_fu_type)
+
+                def _check_restored():
+                    fu = device.selectedFunctionalUnit()
+                    return fu is not None and fu.type() == original_fu_type
+
+                self._wait_for(_check_restored, timeout=1.0)
 
         # Preserve source_types ordering.
         scanner._sources = [source_infos[s] for s in source_types if s in source_infos]
-        scanner._defaults = _read_defaults(device, scanner._sources)
+        scanner._defaults = self._on_main(_read_defaults, device, scanner._sources)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
         self._open_sessions.discard(scanner.name)
         device = self._devices.get(scanner.name)
-        if device is not None:
-            close_delegate = _ScanDelegate.alloc().init()
-            device.setDelegate_(close_delegate)
+        if device is None:
+            return
+
+        def _request_close():
+            d = _ScanDelegate.alloc().init()
+            device.setDelegate_(d)
             device.requestCloseSession()
-            run_loop = NSRunLoop.currentRunLoop()
-            deadline = NSDate.dateWithTimeIntervalSinceNow_(5.0)
-            while not close_delegate._session_closed:
-                if deadline.timeIntervalSinceNow() <= 0:
-                    break
-                run_loop.runMode_beforeDate_(
-                    NSDefaultRunLoopMode,
-                    NSDate.dateWithTimeIntervalSinceNow_(0.1),
-                )
+            return d
+
+        close_delegate = self._on_main(_request_close)
+        close_delegate._closed_event.wait(timeout=5.0)
 
     def _scan_pages_impl(
         self, scanner: Scanner, options: ScanOptions
@@ -648,49 +689,46 @@ class MacOSBackend:
             raise ScanError("Scanner is not open")
 
         # Create a fresh delegate for each scan.
-        scan_delegate = _ScanDelegate.alloc().init()
-        device.setDelegate_(scan_delegate)
+        scan_delegate = self._on_main(
+            lambda: _ScanDelegate.alloc().init()
+        )
+        self._on_main(device.setDelegate_, scan_delegate)
 
         try:
-            device.setTransferMode_(_TRANSFER_MODE_MEMORY_BASED)
+            self._on_main(device.setTransferMode_, _TRANSFER_MODE_MEMORY_BASED)
 
-            # Select scan source if specified, and wait for the switch
-            # to complete — requestSelectFunctionalUnit_ is asynchronous.
+            # Select scan source if specified, and wait for the switch.
             if options.source is not None:
                 icc_type = _SCAN_SOURCE_TO_ICC.get(options.source)
                 if icc_type is not None:
-                    unit_types = device.availableFunctionalUnitTypes()
+                    unit_types = self._on_main(device.availableFunctionalUnitTypes)
                     if unit_types and icc_type in unit_types:
-                        device.requestSelectFunctionalUnit_(icc_type)
-                        deadline = NSDate.dateWithTimeIntervalSinceNow_(2.0)
-                        while True:
-                            fu = device.selectedFunctionalUnit()
-                            if fu is not None and fu.type() == icc_type:
-                                break
-                            if NSDate.date().compare_(deadline) != -1:
-                                break
-                            NSRunLoop.currentRunLoop().runUntilDate_(
-                                NSDate.dateWithTimeIntervalSinceNow_(0.1),
-                            )
+                        self._on_main(
+                            device.requestSelectFunctionalUnit_, icc_type
+                        )
 
-            # Configure functional unit settings
-            fu = device.selectedFunctionalUnit()
-            if fu is not None:
+                        def _check_source(expected=icc_type):
+                            fu = device.selectedFunctionalUnit()
+                            return fu is not None and fu.type() == expected
+
+                        self._wait_for(_check_source, timeout=2.0)
+
+            # Configure functional unit settings.
+            def _configure_fu():
+                fu = device.selectedFunctionalUnit()
+                if fu is None:
+                    return 0
                 fu.setResolution_(options.dpi)
                 pixel_type = _COLOR_MODE_TO_PIXEL_DATA_TYPE.get(options.color_mode)
                 if pixel_type is not None:
                     fu.setPixelDataType_(pixel_type)
 
                 # Pick bit depth: BW wants 1-bit, everything else 8-bit.
-                # Query supported depths and fall back to 8 if the
-                # preferred depth isn't available.
                 preferred_bpc = 1 if options.color_mode == ColorMode.BW else 8
                 supported_depths = fu.supportedBitDepths()
                 if supported_depths and supported_depths.containsIndex_(preferred_bpc):
                     fu.setBitDepth_(preferred_bpc)
                 elif supported_depths and supported_depths.count() > 0:
-                    # Use the smallest supported depth >= preferred, or
-                    # just the smallest available.
                     idx = supported_depths.indexGreaterThanOrEqualToIndex_(
                         preferred_bpc
                     )
@@ -713,44 +751,43 @@ class MacOSBackend:
                     phys = fu.physicalSize()
                     fu.setScanArea_(((0, 0), (phys.width, phys.height)))
 
-            # Pre-compute expected pixel height for progress reporting.
-            expected_height = 0
-            if fu is not None:
+                # Compute expected pixel height for progress reporting.
                 scan_area = fu.scanArea()
                 unit_factor = _measurement_factor(fu.measurementUnit())
                 if unit_factor is None:
                     unit_factor = MM_PER_INCH * 10
                 area_mm = scan_area.size.height * unit_factor
-                expected_height = int(area_mm / (MM_PER_INCH * 10) * options.dpi)
+                return int(area_mm / (MM_PER_INCH * 10) * options.dpi)
+
+            expected_height = self._on_main(_configure_fu)
 
             check_progress(options.progress, 0)
 
-            # Spin the run loop briefly so the device can process the
-            # configuration changes before we issue the scan request.
-            run_loop = NSRunLoop.currentRunLoop()
-            run_loop.runMode_beforeDate_(
-                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(1.0)
-            )
+            # Brief pause so the device can process config changes.
+            time.sleep(0.5)
 
             is_feeder = options.source == ScanSource.FEEDER
             all_pages: list[ScannedPage] = []
 
             while True:
-                scan_delegate._done = False
+                scan_delegate._scan_done.clear()
                 scan_delegate.error = None
                 scan_delegate.completed_pages = []
                 scan_delegate._current_bands = []
                 scan_delegate._rows_received = 0
                 scan_delegate._last_pct = 0
+                scan_delegate._aborted = False
                 scan_delegate._expected_height = expected_height
                 scan_delegate._progress = options.progress
 
-                device.requestScan()
-                try:
-                    _run_until(scan_delegate, timeout=120.0)
-                except ScanAborted:
-                    device.cancelScan()
-                    raise
+                check_progress(options.progress, -1)
+
+                self._on_main(device.requestScan)
+                scan_delegate._scan_done.wait(timeout=120.0)
+
+                if scan_delegate._aborted:
+                    self._on_main(device.cancelScan)
+                    raise ScanAborted("Scan aborted by user")
 
                 if scan_delegate.error:
                     err_lower = scan_delegate.error.lower()
