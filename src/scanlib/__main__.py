@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 
 from . import __version__, list_scanners, open_scanner
 from ._types import (
@@ -83,15 +84,75 @@ def _err(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def _progress(percent: int) -> bool:
-    if percent < 0:
-        sys.stderr.write("\rScanning...")
-    elif percent >= 100:
-        sys.stderr.write("\rScanning... 100%\n")
-    else:
-        sys.stderr.write(f"\rScanning... {percent}%")
-    sys.stderr.flush()
-    return True
+_BAR_WIDTH = 30
+_PULSE_WIDTH = 6  # width of the sliding highlight
+
+
+class _Progress:
+    """Progress reporter with animated indeterminate and determinate bars.
+
+    During the indeterminate phase (percent < 0) a highlight slides
+    back and forth across the bar in a background thread.  Once a real
+    percentage arrives the bar switches to a standard fill.
+    """
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def __call__(self, percent: int) -> bool:
+        if percent < 0:
+            self._start_pulse()
+        elif percent >= 100:
+            self._stop_pulse()
+            bar = "\u2588" * _BAR_WIDTH
+            sys.stderr.write(f"\r  Scanning [{bar}] 100%\033[K\n")
+            sys.stderr.flush()
+        else:
+            self._stop_pulse()
+            filled = int(_BAR_WIDTH * percent / 100)
+            empty = _BAR_WIDTH - filled
+            bar = "\u2588" * filled + "\u2591" * empty
+            sys.stderr.write(f"\r  Scanning [{bar}] {percent:3d}%\033[K")
+            sys.stderr.flush()
+        return True
+
+    def _start_pulse(self) -> None:
+        with self._lock:
+            if self._thread is not None:
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._pulse_loop, daemon=True)
+            self._thread.start()
+
+    def _stop_pulse(self) -> None:
+        with self._lock:
+            if self._thread is None:
+                return
+            self._stop.set()
+            t = self._thread
+            self._thread = None
+        t.join(timeout=1)
+
+    def _pulse_loop(self) -> None:
+        import time
+
+        pos = 0
+        direction = 1
+        while not self._stop.is_set():
+            bar = ["\u2591"] * _BAR_WIDTH
+            for i in range(pos, min(pos + _PULSE_WIDTH, _BAR_WIDTH)):
+                bar[i] = "\u2588"
+            line = "".join(bar)
+            sys.stderr.write(f"\r  Scanning [{line}]   - \033[K")
+            sys.stderr.flush()
+            pos += direction
+            if pos + _PULSE_WIDTH >= _BAR_WIDTH:
+                direction = -1
+            elif pos <= 0:
+                direction = 1
+            time.sleep(0.08)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +335,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 color_mode=color_mode,
                 source=source,
                 scan_area=scan_area,
-                progress=_progress,
+                progress=_Progress(),
                 next_page=next_page,
                 image_format=image_format,
                 jpeg_quality=args.jpeg_quality,
