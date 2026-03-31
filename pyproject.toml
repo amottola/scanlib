@@ -4,16 +4,43 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scanlib"
-version = "1.1.0"
+version = "1.2.0"
 description = "A multiplatform document scanning library for Python"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Angelo Mottola", email = "a.mottola@gmail.com"}]
+keywords = ["scanner", "scanning", "sane", "wia", "escl", "airscan", "twain", "pdf", "document"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C",
+    "Topic :: Multimedia :: Graphics :: Capture :: Scanners",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 requires-python = ">=3.9"
 dependencies = [
     "comtypes>=1.4; sys_platform == 'win32'",
     "pyobjc-framework-ImageCaptureCore; sys_platform == 'darwin'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/amottola/scanlib"
+Documentation = "https://python-scanlib.readthedocs.io/"
+Repository = "https://github.com/amottola/scanlib"
+Changelog = "https://github.com/amottola/scanlib/blob/main/CHANGELOG.md"
+Issues = "https://github.com/amottola/scanlib/issues"
 
 [project.scripts]
 scanlib = "scanlib.__main__:main"
