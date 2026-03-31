@@ -106,8 +106,7 @@ class _Progress:
             self._start_pulse()
         elif percent >= 100:
             self._stop_pulse()
-            bar = "\u2588" * _BAR_WIDTH
-            sys.stderr.write(f"\r  Scanning [{bar}] 100%\033[K\n")
+            sys.stderr.write("\r\033[K")
             sys.stderr.flush()
         else:
             self._stop_pulse()
@@ -134,6 +133,8 @@ class _Progress:
             t = self._thread
             self._thread = None
         t.join(timeout=1)
+        sys.stderr.write("\r\033[K")
+        sys.stderr.flush()
 
     def _pulse_loop(self) -> None:
         import time
