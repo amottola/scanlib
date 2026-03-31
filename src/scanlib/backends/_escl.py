@@ -777,14 +777,15 @@ class EsclBackend:
         except Exception as exc:
             raise ScanError(f"Failed to create scan job: {exc}") from exc
 
+        # Scanner is now physically scanning — report indeterminate progress
+        check_progress(options.progress, -1)
+
         try:
             page_num = 0
             while True:
                 if scanner._abort_event.is_set():
                     conn.delete_job(job_path)
                     raise ScanAborted("Scan aborted")
-
-                check_progress(options.progress, -1)
 
                 try:
                     result = conn.get_next_document(job_path)
