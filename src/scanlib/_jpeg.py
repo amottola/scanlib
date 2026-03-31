@@ -371,6 +371,10 @@ elif sys.platform == "win32":
         if ptr:
             _vtbl_call(ptr, 2, _Release_proto)
 
+    # Use c_long (not HRESULT) so ctypes doesn't auto-raise on negative
+    # returns like RPC_E_CHANGED_MODE — we handle those ourselves.
+    _ole32.CoInitializeEx.argtypes = [c_void_p, DWORD]
+    _ole32.CoInitializeEx.restype = ctypes.c_long
     _ole32.CoCreateInstance.argtypes = [
         ctypes.POINTER(_GUID),
         c_void_p,
@@ -391,16 +395,31 @@ elif sys.platform == "win32":
     _kernel32.GlobalUnlock.restype = BOOL
 
     _wic_factory = None
+    _com_initialized = False
+
+    _COINIT_APARTMENTTHREADED = 0x2
+
+    def _ensure_com():
+        """Initialize COM on the current thread if not already done.
+
+        When scanning via the eSCL backend the WIA backend is never loaded,
+        so COM may not have been initialized.  Tries STA to match what the
+        WIA backend uses.  If the thread already has a COM apartment
+        (``RPC_E_CHANGED_MODE``), that's fine — WIC works in any mode.
+        """
+        global _com_initialized
+        if _com_initialized:
+            return
+        _ole32.CoInitializeEx(None, _COINIT_APARTMENTTHREADED)
+        _com_initialized = True
 
     def _get_wic_factory():
-        """Lazily create the WIC factory on first use.
-
-        COM is already initialized by the WIA backend (via comtypes) before
-        any encoding happens, so we just create the factory here.
-        """
+        """Lazily create the WIC factory on first use."""
         global _wic_factory
         if _wic_factory is not None:
             return _wic_factory
+
+        _ensure_com()
 
         _wic_factory = c_void_p()
         hr = _ole32.CoCreateInstance(
@@ -611,7 +630,7 @@ elif sys.platform == "win32":
             # Seek back to start
             _vtbl_call(stream, 5, _IStream_Seek, _LARGE_INTEGER(0), 0, None)
 
-            # IWICImagingFactory::CreateDecoderFromStream (slot 5)
+            # IWICImagingFactory::CreateDecoderFromStream (slot 4)
             _CreateDecoder = ctypes.WINFUNCTYPE(
                 HRESULT,
                 c_void_p,
@@ -622,7 +641,7 @@ elif sys.platform == "win32":
             )
             hr = _vtbl_call(
                 factory,
-                5,
+                4,
                 _CreateDecoder,
                 stream,
                 None,
@@ -634,11 +653,11 @@ elif sys.platform == "win32":
                     f"CreateDecoderFromStream failed: 0x{hr & 0xFFFFFFFF:08x}"
                 )
 
-            # IWICBitmapDecoder::GetFrame(0) (slot 9)
+            # IWICBitmapDecoder::GetFrame(0) (slot 13)
             _GetFrame = ctypes.WINFUNCTYPE(
                 HRESULT, c_void_p, DWORD, ctypes.POINTER(c_void_p)
             )
-            hr = _vtbl_call(decoder, 9, _GetFrame, 0, byref(frame))
+            hr = _vtbl_call(decoder, 13, _GetFrame, 0, byref(frame))
             if hr < 0:
                 raise RuntimeError(f"GetFrame failed: 0x{hr & 0xFFFFFFFF:08x}")
 

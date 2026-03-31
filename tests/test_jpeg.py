@@ -1,4 +1,4 @@
-"""Tests for the JPEG encoder (platform-native: ImageIO / WIC / libjpeg)."""
+"""Tests for the JPEG codec (platform-native: ImageIO / WIC / libjpeg)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from scanlib._jpeg import encode_jpeg
+from scanlib._jpeg import decode_jpeg, encode_jpeg
 from scanlib._types import ColorMode
 
 
@@ -142,3 +142,25 @@ class TestJpegSof:
         assert w == 48
         assert h == 32
         assert ncomp == 3
+
+
+class TestJpegRoundtrip:
+    """Encode then decode — verifies the WIC decoder vtable slots are correct."""
+
+    def test_color_roundtrip(self):
+        pixels = _gradient_rgb(16, 16)
+        jpeg = encode_jpeg(pixels, 16, 16, ColorMode.COLOR, 95)
+        raw, w, h, c = decode_jpeg(jpeg)
+        assert w == 16
+        assert h == 16
+        assert c == 3
+        assert len(raw) == 16 * 16 * 3
+
+    def test_grayscale_roundtrip(self):
+        pixels = _gradient_gray(16, 16)
+        jpeg = encode_jpeg(pixels, 16, 16, ColorMode.GRAY, 95)
+        raw, w, h, c = decode_jpeg(jpeg)
+        assert w == 16
+        assert h == 16
+        assert c == 1
+        assert len(raw) == 16 * 16
