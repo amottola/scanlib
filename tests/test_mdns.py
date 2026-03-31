@@ -149,15 +149,15 @@ class TestParseResponses:
         target_name = "Canon._uscan._tcp.local."
         rdata = _encode_name(target_name)
         data = self._build_response([("_uscan._tcp.local.", 12, rdata)])
-        ptrs, txts, addrs = _parse_responses(data)
-        assert target_name in ptrs
+        ptrs, txts, addrs, srvs = _parse_responses(data)
+        assert ("_uscan._tcp.local.", target_name) in ptrs
 
     def test_txt_record(self):
         s1 = b"note=Office"
         s2 = b"ty=Canon MF240"
         rdata = bytes([len(s1)]) + s1 + bytes([len(s2)]) + s2
         data = self._build_response([("Canon._uscan._tcp.local.", 16, rdata)])
-        ptrs, txts, addrs = _parse_responses(data)
+        ptrs, txts, addrs, srvs = _parse_responses(data)
         assert "Canon._uscan._tcp.local." in txts
         assert txts["Canon._uscan._tcp.local."]["note"] == "Office"
         assert txts["Canon._uscan._tcp.local."]["ty"] == "Canon MF240"
@@ -167,15 +167,27 @@ class TestParseResponses:
 
         rdata = socket.inet_aton("192.168.1.5")
         data = self._build_response([("printer.local.", 1, rdata)])
-        ptrs, txts, addrs = _parse_responses(data)
+        ptrs, txts, addrs, srvs = _parse_responses(data)
         assert "192.168.1.5" in addrs.get("printer.local.", [])
 
     def test_empty_packet(self):
-        ptrs, txts, addrs = _parse_responses(b"")
+        ptrs, txts, addrs, srvs = _parse_responses(b"")
         assert ptrs == []
         assert txts == {}
         assert addrs == {}
 
+    def test_srv_record_port(self):
+        import struct
+
+        # SRV RDATA: priority(2) + weight(2) + port(2) + target name
+        target_name = _encode_name("printer.local.")
+        rdata = struct.pack(">HHH", 0, 0, 8443) + target_name
+        data = self._build_response([("Canon._uscan._tcp.local.", 33, rdata)])
+        ptrs, txts, addrs, srvs = _parse_responses(data)
+        assert "Canon._uscan._tcp.local." in srvs
+        assert srvs["Canon._uscan._tcp.local."].port == 8443
+        assert srvs["Canon._uscan._tcp.local."].target == "printer.local."
+
     def test_truncated_packet(self):
-        ptrs, txts, addrs = _parse_responses(b"\x00" * 6)
+        ptrs, txts, addrs, srvs = _parse_responses(b"\x00" * 6)
         assert ptrs == []

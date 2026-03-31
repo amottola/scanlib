@@ -1,8 +1,9 @@
-"""mDNS scanner location lookup.
+"""mDNS scanner location and eSCL service discovery.
 
 Browses ``_uscan._tcp`` and ``_uscans._tcp`` services via multicast DNS
-to collect the ``note`` TXT record (a free-form location string) for
-network scanners.  Uses only the standard library (``socket``, ``struct``).
+to collect the ``note`` TXT record (a free-form location string) and
+full eSCL service information for network scanners.  Uses only the
+standard library (``socket``, ``struct``).
 """
 
 from __future__ import annotations
@@ -42,6 +43,19 @@ class LocationMap:
 
     def __bool__(self) -> bool:
         return bool(self.by_ip) or bool(self.by_name)
+
+
+@dataclasses.dataclass(frozen=True)
+class EsclServiceInfo:
+    """Discovered eSCL scanner service from mDNS."""
+
+    ip: str
+    port: int
+    tls: bool
+    resource_path: str  # e.g. "eSCL"
+    name: str  # human-readable device name (from ``ty`` TXT record)
+    note: str | None  # free-form location string
+    uuid: str | None  # unique device identifier
 
 
 # ---------------------------------------------------------------------------
@@ -119,18 +133,32 @@ def _parse_txt(data: bytes, rdstart: int, rdlength: int) -> dict[str, str]:
     return result
 
 
+@dataclasses.dataclass
+class _SrvInfo:
+    """Parsed SRV record: target hostname and port."""
+
+    target: str
+    port: int
+
+
 def _parse_responses(
     data: bytes,
-) -> tuple[list[str], dict[str, dict[str, str]], dict[str, list[str]]]:
+) -> tuple[
+    list[tuple[str, str]],
+    dict[str, dict[str, str]],
+    dict[str, list[str]],
+    dict[str, _SrvInfo],
+]:
     """Parse a DNS response packet.
 
-    Returns ``(ptr_targets, txt_records, a_records)`` where:
-    - *ptr_targets* is a list of PTR target names
+    Returns ``(ptr_targets, txt_records, a_records, srv_records)`` where:
+    - *ptr_targets* is a list of ``(service_type, instance_name)`` tuples
     - *txt_records* maps owner name → TXT key/value dict
     - *a_records* maps owner name → list of IP address strings
+    - *srv_records* maps service instance name → :class:`_SrvInfo`
     """
     if len(data) < 12:
-        return [], {}, {}
+        return [], {}, {}, {}
 
     _id, _flags, qdcount, ancount, nscount, arcount = struct.unpack(
         ">HHHHHH", data[:12]
@@ -142,10 +170,10 @@ def _parse_responses(
         _, offset = _read_name(data, offset)
         offset += 4  # QTYPE + QCLASS
 
-    ptrs: list[str] = []
+    ptrs: list[tuple[str, str]] = []
     txts: dict[str, dict[str, str]] = {}
     addrs: dict[str, list[str]] = {}
-    srv_targets: dict[str, str] = {}  # service name → SRV target hostname
+    srvs: dict[str, _SrvInfo] = {}
 
     total = ancount + nscount + arcount
     for _ in range(total):
@@ -161,7 +189,7 @@ def _parse_responses(
 
         if rtype == _TYPE_PTR:
             target, _ = _read_name(data, rdstart)
-            ptrs.append(target)
+            ptrs.append((name, target))
         elif rtype == _TYPE_TXT:
             txts[name] = _parse_txt(data, rdstart, rdlength)
         elif rtype == _TYPE_A and rdlength == 4:
@@ -171,33 +199,42 @@ def _parse_responses(
             ip = socket.inet_ntop(socket.AF_INET6, data[rdstart : rdstart + 16])
             addrs.setdefault(name, []).append(ip)
         elif rtype == _TYPE_SRV and rdlength > 6:
+            port = struct.unpack(">H", data[rdstart + 4 : rdstart + 6])[0]
             srv_target, _ = _read_name(data, rdstart + 6)
-            srv_targets[name] = srv_target
+            srvs[name] = _SrvInfo(target=srv_target, port=port)
 
     # Resolve SRV target addresses: if a service name has no direct A
     # records but its SRV target does, copy them over.
     # (mDNS often puts A records under the hostname, not the service name.)
-    for sname, srv_target in srv_targets.items():
-        if sname not in addrs and srv_target in addrs:
-            addrs[sname] = addrs[srv_target]
+    for sname, srv in srvs.items():
+        if sname not in addrs and srv.target in addrs:
+            addrs[sname] = addrs[srv.target]
 
-    return ptrs, txts, addrs
+    return ptrs, txts, addrs, srvs
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Shared mDNS browse
 # ---------------------------------------------------------------------------
 
 
-def get_location_map(timeout: float = 4.0) -> LocationMap:
-    """Browse mDNS for scanner services and read ``note`` TXT records.
+@dataclasses.dataclass
+class _BrowseResult:
+    """Raw mDNS browse data collected from the network."""
 
-    Returns a :class:`LocationMap` with IP → note and device-name → note
-    mappings.  Returns an empty ``LocationMap`` on any network error.
+    ptrs: set[tuple[str, str]] = dataclasses.field(default_factory=set)
+    txts: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
+    addrs: dict[str, list[str]] = dataclasses.field(default_factory=dict)
+    srvs: dict[str, _SrvInfo] = dataclasses.field(default_factory=dict)
 
-    *timeout* controls how long (in seconds) to listen for mDNS responses.
+
+def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
+    """Send mDNS queries and collect responses.
+
+    Returns the raw browse data.  Raises no exceptions — returns an
+    empty result on any network error.
     """
-    result = LocationMap()
+    result = _BrowseResult()
 
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -226,11 +263,6 @@ def get_location_map(timeout: float = 4.0) -> LocationMap:
         query = _build_query(*_SERVICE_TYPES)
         sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
 
-        # Collect all service instance names, TXT records, and addresses
-        all_ptrs: set[str] = set()
-        all_txts: dict[str, dict[str, str]] = {}
-        all_addrs: dict[str, list[str]] = {}
-
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
@@ -243,28 +275,12 @@ def get_location_map(timeout: float = 4.0) -> LocationMap:
                 data, _addr = sock.recvfrom(4096)
             except OSError:
                 continue
-            ptrs, txts, addrs = _parse_responses(data)
-            all_ptrs.update(ptrs)
-            all_txts.update(txts)
+            ptrs, txts, addrs, srvs = _parse_responses(data)
+            result.ptrs.update(ptrs)
+            result.txts.update(txts)
             for k, v in addrs.items():
-                all_addrs.setdefault(k, []).extend(v)
-
-        # Match PTR targets to their TXT and A records
-        for instance_name in all_ptrs:
-            txt = all_txts.get(instance_name, {})
-            note = txt.get("note", "").strip()
-            if not note:
-                continue
-
-            # Collect IPs for this service instance
-            ips = all_addrs.get(instance_name, [])
-            for ip in ips:
-                result.by_ip[ip] = note
-
-            # Use the ``ty`` TXT record as the device-name key
-            ty = txt.get("ty", "").strip()
-            if ty:
-                result.by_name[ty] = note
+                result.addrs.setdefault(k, []).extend(v)
+            result.srvs.update(srvs)
 
     except OSError:
         pass
@@ -272,6 +288,92 @@ def get_location_map(timeout: float = 4.0) -> LocationMap:
         sock.close()
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def get_location_map(timeout: float = 4.0) -> LocationMap:
+    """Browse mDNS for scanner services and read ``note`` TXT records.
+
+    Returns a :class:`LocationMap` with IP → note and device-name → note
+    mappings.  Returns an empty ``LocationMap`` on any network error.
+
+    *timeout* controls how long (in seconds) to listen for mDNS responses.
+    """
+    loc = LocationMap()
+    browse = _browse_mdns(timeout)
+
+    for _svc_type, instance_name in browse.ptrs:
+        txt = browse.txts.get(instance_name, {})
+        note = txt.get("note", "").strip()
+        if not note:
+            continue
+
+        ips = browse.addrs.get(instance_name, [])
+        for ip in ips:
+            loc.by_ip[ip] = note
+
+        ty = txt.get("ty", "").strip()
+        if ty:
+            loc.by_name[ty] = note
+
+    return loc
+
+
+def discover_escl_services(timeout: float = 4.0) -> list[EsclServiceInfo]:
+    """Browse mDNS for eSCL scanner services.
+
+    Returns a list of :class:`EsclServiceInfo` objects, one per unique
+    scanner (deduplicated by UUID when available, then by IP).
+
+    *timeout* controls how long (in seconds) to listen for mDNS responses.
+    """
+    browse = _browse_mdns(timeout)
+    seen_uuids: set[str] = set()
+    seen_ips: set[str] = set()
+    services: list[EsclServiceInfo] = []
+
+    for svc_type, instance_name in browse.ptrs:
+        txt = browse.txts.get(instance_name, {})
+        srv = browse.srvs.get(instance_name)
+        ips = browse.addrs.get(instance_name, [])
+        if not ips:
+            continue
+
+        tls = "_uscans._tcp" in svc_type
+        port = srv.port if srv else (443 if tls else 80)
+        rs = txt.get("rs", "eSCL").strip("/")
+        ty = txt.get("ty", "").strip() or instance_name.split("._")[0]
+        note = txt.get("note", "").strip() or None
+        uuid = txt.get("UUID", "").strip() or None
+
+        # Deduplicate: same scanner may appear under both _uscan and _uscans
+        if uuid:
+            if uuid in seen_uuids:
+                continue
+            seen_uuids.add(uuid)
+
+        ip = ips[0]
+        if not uuid and ip in seen_ips:
+            continue
+        seen_ips.add(ip)
+
+        services.append(
+            EsclServiceInfo(
+                ip=ip,
+                port=port,
+                tls=tls,
+                resource_path=rs,
+                name=ty,
+                note=note,
+                uuid=uuid,
+            )
+        )
+
+    return services
 
 
 _CACHE_TTL = 60.0  # seconds

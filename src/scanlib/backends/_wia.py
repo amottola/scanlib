@@ -920,10 +920,6 @@ class WiaBackend:
         timeout: float = DISCOVERY_TIMEOUT,
         cancel: threading.Event | None = None,
     ) -> list[Scanner]:
-        from .._mdns import browse_in_thread
-
-        t_mdns, loc_box = browse_in_thread(timeout)
-
         event = threading.Event()
         box: dict = {}
         self._queue.put((self._list_scanners_impl, (), event, box))
@@ -934,17 +930,8 @@ class WiaBackend:
             raise box["error"]
         scanners = box.get("value", [])
 
-        t_mdns.join(timeout=0.5)
-        locations = loc_box[0]
-
-        # Match WIA scanners to mDNS location by device name.
-        # The mDNS ``ty`` TXT record often matches the WIA device name.
-        name_locations = locations.by_name if locations else {}
         for s in scanners:
             s._backend_impl = self
-            loc = name_locations.get(s.name)
-            if loc:
-                s._location = loc
         return scanners
 
     def open_scanner(self, scanner: Scanner) -> None:

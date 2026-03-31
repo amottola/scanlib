@@ -797,7 +797,7 @@ class SaneBackend:
         timeout: float = DISCOVERY_TIMEOUT,
         cancel: threading.Event | None = None,
     ) -> list[Scanner]:
-        from .._mdns import browse_in_thread, extract_ip_from_uri
+        from .._mdns import extract_ip_from_uri
 
         result: list | None = None
         error: BaseException | None = None
@@ -813,49 +813,35 @@ class SaneBackend:
                 done.set()
 
         t = threading.Thread(target=_discover, daemon=True)
-        t_mdns, loc_box = browse_in_thread(timeout)
         t.start()
         if not wait_or_cancel(done, timeout, cancel):
             return []
-        t_mdns.join(timeout=0.5)
-        locations = loc_box[0]
         if error is not None:
             raise error
-        # Deduplicate — multiple SANE backends may claim the same
-        # physical device (USB bus:dev or network IP).  The first
-        # entry is kept (SANE lists the most capable backend first).
-        # For eSCL backends (escl: and airscan:) that lack an IP in
-        # the device name, fall back to model-name matching.
+        # Only list local (USB) scanners — network scanners are handled
+        # by the eSCL backend via the composite backend.  Skip v4l
+        # devices and deduplicate by USB bus:dev identity.
         scanners: list[Scanner] = []
         seen: set[str] = set()
-        seen_escl_models: list[str] = []
         for dev_info in result or []:
             if dev_info[0].startswith("v4l:"):
+                continue
+            # Skip network scanners (eSCL, airscan, or anything with an IP)
+            if dev_info[0].startswith(("escl:", "airscan:")):
+                continue
+            if extract_ip_from_uri(dev_info[0]):
                 continue
             dev_id = _extract_device_id(dev_info[0])
             if dev_id:
                 if dev_id in seen:
                     continue
                 seen.add(dev_id)
-            is_escl = dev_info[0].startswith(("escl:", "airscan:"))
-            if is_escl:
-                model = (dev_info[2] or "").strip().lower()
-                if model and any(s in model or model in s for s in seen_escl_models):
-                    continue
-                if model:
-                    seen_escl_models.append(model)
-            # Look up mDNS location note by IP
-            location = None
-            ip = extract_ip_from_uri(dev_info[0])
-            if ip and locations:
-                location = locations.by_ip.get(ip)
             scanners.append(
                 Scanner(
                     name=dev_info[0],
                     vendor=dev_info[1] or None,
                     model=dev_info[2] or None,
                     backend="sane",
-                    location=location,
                     _backend_impl=self,
                 )
             )

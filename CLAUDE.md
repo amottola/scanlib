@@ -33,7 +33,7 @@ python -m black .
 
 ## Architecture
 
-Scanlib is a multiplatform document scanning library. It provides a unified Python API across three platform-native backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), and WIA 2.0 (Windows, comtypes + ctypes).
+Scanlib is a multiplatform document scanning library. It provides a unified Python API across four backends: SANE (Linux, ctypes to libsane), ImageCaptureCore (macOS, pyobjc), WIA 2.0 (Windows, comtypes + ctypes), and eSCL/AirScan (cross-platform, direct HTTP to network scanners).
 
 ### C accelerator extension (`_scanlib_accel`)
 
@@ -47,34 +47,36 @@ A required CPython C extension provides pixel conversion, BMP parsing, and JPEG 
 - **`rotate_pixels`** — clockwise pixel rotation (90°/180°/270°) for 8-bit grayscale, RGB, and 1-bit BW
 - **`bmp_to_raw`** — BMP file to raw pixel conversion (handles 1/8/24/32-bit BMPs, BGR→RGB swap, bottom-up reordering)
 - **`encode_jpeg`** — JPEG encoding via libjpeg (Linux only, compiled conditionally via `#ifdef HAVE_JPEGLIB`)
+- **`decode_jpeg`** — JPEG decoding via libjpeg (Linux only, `#ifdef HAVE_JPEGLIB`). Returns `(raw_pixels, width, height, components)`. Used by the eSCL backend to decode scanner responses.
 
-The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is in `setup.py`. On Linux, `setup.py` links against libjpeg and defines `HAVE_JPEGLIB` to enable the JPEG encoder. The GIL is released during computation in all functions.
+The extension is built from `src/accel/_scanlib_accel.c`. Build configuration is in `setup.py`. On Linux, `setup.py` links against libjpeg and defines `HAVE_JPEGLIB` to enable the JPEG encoder/decoder. The GIL is released during computation in all functions.
 
 ### Page encoding (`_jpeg.py` and `_types.py`)
 
-`_jpeg.py` provides a unified `encode_jpeg()` using platform-native encoders with no fallback chain:
+`_jpeg.py` provides unified `encode_jpeg()` and `decode_jpeg()` using platform-native codecs with no fallback chain:
 
 - **macOS**: ImageIO framework (always available, via ctypes)
 - **Windows**: WIC — Windows Imaging Component (always available, via raw COM vtable calls with ctypes). Uses `IWICImagingFactory`/`IWICBitmapEncoder`/`IWICBitmapFrameEncode`. The factory is created lazily on first encode to avoid COM apartment conflicts with comtypes (which defaults to STA). Quality is set via `IPropertyBag2::Write` with `"ImageQuality"` property. Color images require RGB→BGR conversion via `rgb_to_bgr` from `_scanlib_accel`.
 - **Linux**: libjpeg, compiled into the `_scanlib_accel` C extension at build time (requires `libjpeg-dev` headers). The `_jpeg.py` Linux branch is a thin wrapper that calls `_scanlib_accel.encode_jpeg`.
 
-The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` directly for each platform — no dispatch function or boolean flags.
+The file is structured as a single `if sys.platform` block that defines `encode_jpeg()` and `decode_jpeg()` directly for each platform — no dispatch function or boolean flags. `decode_jpeg()` returns `(raw_pixels, width, height, components)` and is used by the eSCL backend to decode JPEG responses from scanners.
 
 PNG encoding is handled in `build_pdf()` (`_types.py`) using stdlib `zlib` for deflate compression — no external dependency. Each `ScannedPage` exposes both `to_jpeg(quality)` and `to_png()` methods. When `image_format` is not specified, `build_pdf()` defaults to PNG for BW mode (1-bit packs much smaller than JPEG's 8-bit grayscale) and JPEG for color/grayscale.
 
 ### Backend selection and thread dispatch
 
-`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. Each backend handles its own thread safety internally:
+`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. On Linux and Windows, a `_CompositeBackend` wraps the platform backend together with the eSCL backend — `list_scanners()` runs both in parallel and deduplicates by IP address. On macOS, only `MacOSBackend` is used (ImageCaptureCore already handles eSCL natively). Each backend handles its own thread safety internally:
 
 - **SANE**: used directly (synchronous ctypes, thread-safe)
 - **macOS**: `MacOSBackend` uses a lock and main-thread dispatch — from the main thread, calls run directly; from a background thread, calls are forwarded via `performSelectorOnMainThread:withObject:waitUntilDone:` (ImageCaptureCore delivers callbacks via the main dispatch queue). Background-thread usage assumes the main thread is running a run loop.
 - **WIA**: `WiaBackend` owns a dedicated STA worker thread with a Win32 message pump (`MsgWaitForMultipleObjects` + `PeekMessage`/`DispatchMessage`) — all calls are marshalled to the worker thread which owns the COM apartment. The message pump is required because WIA COM objects are apartment-threaded and need message processing for COM marshaling. A Win32 event is used to signal work availability to the message loop.
+- **eSCL**: `EsclBackend` uses direct HTTP(S) via stdlib `http.client`. No threading requirements — all calls are synchronous on the caller's thread. Self-signed TLS certificates are accepted (common for consumer scanners).
 
-Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner objects so subsequent calls route through the dispatch layer.
+Both macOS and WIA backends patch `scanner._backend_impl` on returned Scanner objects so subsequent calls route through the dispatch layer. The composite backend delegates each scanner's operations to whichever backend discovered it.
 
 ### Scanner lifecycle
 
-1. `list_scanners()` returns lightweight `Scanner` objects (no device session). `str(scanner)` returns `location` if available, otherwise `vendor model` or `name`. Each Scanner has `id` (unique per device: device URI on SANE, UUID on macOS, WIA device ID on Windows), `name` (platform-specific: device URI on SANE, display name on macOS/WIA), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA), `model` (SANE only; None on macOS/WIA), and `location` (free-form string from mDNS `note` or macOS `locationDescription`).
+1. `list_scanners()` returns lightweight `Scanner` objects (no device session). `str(scanner)` returns `location` if available, otherwise `vendor model` or `name`. Each Scanner has `id` (unique per device: device URI on SANE, UUID on macOS, WIA device ID on Windows, `escl:{uuid}` or `escl:{ip}:{port}` on eSCL), `name` (platform-specific: device URI on SANE, display name on macOS/WIA, `ty` TXT record on eSCL), `vendor` (scanner manufacturer when available: SANE and macOS; None on WIA/eSCL), `model` (SANE only; None on macOS/WIA/eSCL), and `location` (free-form string from mDNS `note` or macOS `locationDescription`).
 2. `scanner.open()` / `with scanner:` opens a device session; the backend populates `sources` (list of `SourceInfo`) and `defaults`
 3. `scanner.scan(...)` calls `scanner.scan_pages()` which yields `ScannedPage` objects (raw pixels), then `build_pdf()` converts them into a single PDF
 4. `scanner.scan_pages(...)` yields individual `ScannedPage` objects for preview/reordering workflows
@@ -122,11 +124,33 @@ Max scan area is determined via a 4-level fallback chain in `_read_wia_max_scan_
 
 The module guards all Windows-specific imports (`comtypes`, `ctypes.wintypes`, `ctypes.windll`) with try/except and provides stubs so it can be imported on non-Windows for testing.
 
+### eSCL (AirScan) direct HTTP backend
+
+The eSCL backend (`backends/_escl.py`) communicates directly with network scanners using the eSCL protocol over HTTP/HTTPS. No OS-level scanner drivers are required. Uses only stdlib modules (`http.client`, `xml.etree`, `ssl`).
+
+**Discovery**: Uses `discover_escl_services()` from `_mdns.py` to browse for `_uscan._tcp` and `_uscans._tcp` mDNS services. Extracts IP, port, TLS flag, resource path (`rs` TXT record), device name (`ty`), location (`note`), and UUID for deduplication. Services discovered under `_uscans._tcp` use HTTPS.
+
+**Capabilities**: `GET /<rs>/ScannerCapabilities` returns XML with `<scan:Platen>` and `<scan:Adf>` elements. The parser extracts discrete resolutions or normalizes resolution ranges, color modes (`BlackAndWhite1`/`Grayscale8`/`RGB24`), and max scan area. All eSCL units are 1/300 inch; conversion to scanlib's 1/10 mm: `tenths_mm = round(escl * 254 / 300)`.
+
+**Scanning**: `POST /<rs>/ScanJobs` with XML settings creates a job (201 + Location header). `GET <job>/NextDocument` retrieves pages as JPEG. For feeder scanning, NextDocument is called in a loop until 404 (no more pages). For flatbed, one page per job. Abort sends `DELETE <job>`.
+
+**Image decoding**: Scanner JPEG responses are decoded to raw pixels using `decode_jpeg()` from `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux). If BW mode was requested, the decoded grayscale is converted to 1-bit packed using `gray_to_bw` from the C extension.
+
+### mDNS service discovery (`_mdns.py`)
+
+Built-in multicast DNS client using only `socket` and `struct`. Sends PTR queries for `_uscan._tcp.local.` and `_uscans._tcp.local.` to `224.0.0.251:5353` and parses responses for PTR, TXT, SRV, A, and AAAA records.
+
+Two public APIs:
+- `get_location_map(timeout)` → `LocationMap` with IP→note and name→note mappings (used by SANE/WIA backends for the `location` property)
+- `discover_escl_services(timeout)` → `list[EsclServiceInfo]` with full service details (used by the eSCL backend)
+
+Both share a common `_browse_mdns()` that performs the network I/O. Results from `get_location_map` are cached for 60 seconds via `browse_in_thread()`. SRV records provide both the port and the target hostname for address resolution.
+
 ## Conventions
 
 - All scan areas are in 1/10 millimeters (e.g., full A4 = `ScanArea(0, 0, 2100, 2970)`)
 - Backends implement the `ScanBackend` Protocol (5 methods: `list_scanners`, `open_scanner`, `close_scanner`, `scan_pages`, `abort_scan`)
 - Backend modules are prefixed with `_` (private); the public API is only what `__init__.py` exports via `__all__`
 - Hardware tests use `@pytest.mark.hardware` and auto-skip when no scanner is detected
-- Page encoding supports JPEG via `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux) and lossless PNG via stdlib `zlib`; pixel conversion is in `_scanlib_accel`; PDF assembly is in `build_pdf()` (`_types.py`)
+- Page encoding supports JPEG via `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux) and lossless PNG via stdlib `zlib`; pixel conversion is in `_scanlib_accel`; JPEG decoding via `decode_jpeg()` in `_jpeg.py`; PDF assembly is in `build_pdf()` (`_types.py`)
 - `_types.py` contains all public types, exceptions, the `ScanBackend` protocol, `build_pdf()`, and shared utilities (`check_progress`, `MM_PER_INCH`)

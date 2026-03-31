@@ -1,6 +1,6 @@
-"""JPEG encoding with platform-native acceleration.
+"""JPEG encoding and decoding with platform-native acceleration.
 
-Each platform uses a mandatory native encoder — no fallback chain:
+Each platform uses a mandatory native codec — no fallback chain:
 - macOS: ImageIO framework (always available)
 - Windows: WIC (Windows Imaging Component, always available)
 - Linux: libjpeg (standard IJG API, universally available)
@@ -194,6 +194,103 @@ if sys.platform == "darwin":
         if result is None:
             raise RuntimeError("ImageIO JPEG encoding failed")
         return result
+
+    # ------------------------------------------------------------------ #
+    # macOS ImageIO decoder (ctypes)                                      #
+    # ------------------------------------------------------------------ #
+
+    _cf.CFDataCreate.restype = ctypes.c_void_p
+    _cf.CFDataCreate.argtypes = [ctypes.c_void_p, ctypes.c_void_p, _CFIndex]
+
+    _io.CGImageSourceCreateWithData.restype = ctypes.c_void_p
+    _io.CGImageSourceCreateWithData.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _io.CGImageSourceCreateImageAtIndex.restype = ctypes.c_void_p
+    _io.CGImageSourceCreateImageAtIndex.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+    ]
+
+    _cg.CGImageGetWidth.restype = ctypes.c_size_t
+    _cg.CGImageGetWidth.argtypes = [ctypes.c_void_p]
+    _cg.CGImageGetHeight.restype = ctypes.c_size_t
+    _cg.CGImageGetHeight.argtypes = [ctypes.c_void_p]
+    _cg.CGImageGetBitsPerPixel.restype = ctypes.c_size_t
+    _cg.CGImageGetBitsPerPixel.argtypes = [ctypes.c_void_p]
+    _cg.CGBitmapContextCreate.restype = ctypes.c_void_p
+    _cg.CGBitmapContextCreate.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+    ]
+    _cg.CGContextDrawImage.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_double * 4,  # CGRect
+        ctypes.c_void_p,
+    ]
+    _cg.CGContextRelease.argtypes = [ctypes.c_void_p]
+
+    def decode_jpeg(data: bytes) -> tuple[bytes, int, int, int]:
+        """Decode JPEG bytes to raw pixels using macOS ImageIO.
+
+        Returns ``(raw_pixels, width, height, components)`` where
+        *components* is 1 for grayscale or 3 for RGB.
+        """
+        cf_data = _cf.CFDataCreate(None, data, len(data))
+        if not cf_data:
+            raise RuntimeError("CFDataCreate failed")
+
+        try:
+            source = _io.CGImageSourceCreateWithData(cf_data, None)
+            if not source:
+                raise RuntimeError("CGImageSourceCreateWithData failed")
+
+            try:
+                image = _io.CGImageSourceCreateImageAtIndex(source, 0, None)
+                if not image:
+                    raise RuntimeError("CGImageSourceCreateImageAtIndex failed")
+
+                try:
+                    width = _cg.CGImageGetWidth(image)
+                    height = _cg.CGImageGetHeight(image)
+                    bpp = _cg.CGImageGetBitsPerPixel(image)
+
+                    if bpp <= 8:
+                        components = 1
+                        cs = _cg.CGColorSpaceCreateWithName(_kCGColorSpaceGenericGray)
+                        bitmap_info = _kCGImageAlphaNone
+                    else:
+                        components = 3
+                        cs = _cg.CGColorSpaceCreateWithName(_kCGColorSpaceSRGB)
+                        bitmap_info = _kCGImageAlphaNone
+
+                    row_bytes = width * components
+                    buf_size = row_bytes * height
+                    buf = (ctypes.c_ubyte * buf_size)()
+
+                    ctx = _cg.CGBitmapContextCreate(
+                        buf, width, height, 8, row_bytes, cs, bitmap_info
+                    )
+                    _cg.CGColorSpaceRelease(cs)
+
+                    if not ctx:
+                        raise RuntimeError("CGBitmapContextCreate failed")
+
+                    rect = (ctypes.c_double * 4)(0, 0, width, height)
+                    _cg.CGContextDrawImage(ctx, rect, image)
+                    _cg.CGContextRelease(ctx)
+
+                    return bytes(buf), width, height, components
+                finally:
+                    _cg.CGImageRelease(image)
+            finally:
+                _cf.CFRelease(source)
+        finally:
+            _cf.CFRelease(cf_data)
 
 elif sys.platform == "win32":
     # ------------------------------------------------------------------ #
@@ -461,11 +558,188 @@ elif sys.platform == "win32":
             _release(encoder)
             _release(stream)
 
+    # ------------------------------------------------------------------ #
+    # Windows WIC decoder (raw ctypes COM vtable calls)                   #
+    # ------------------------------------------------------------------ #
+
+    _GUID_WICPixelFormat24bppRGB = _make_guid("{6fddc324-4e03-4bfe-b185-3d77768dc90d}")
+    _IID_IWICFormatConverter = _make_guid("{00000301-a8f2-4877-ba0a-fd2b6645fb94}")
+
+    # IStream::Write prototype (slot 4)
+    _IStream_Write = ctypes.WINFUNCTYPE(
+        HRESULT, c_void_p, ctypes.c_void_p, ULONG, ctypes.POINTER(ULONG)
+    )
+    # IStream::Seek prototype (slot 5)
+    _LARGE_INTEGER = ctypes.c_int64
+    _ULARGE_INTEGER = ctypes.c_uint64
+    _IStream_Seek = ctypes.WINFUNCTYPE(
+        HRESULT,
+        c_void_p,
+        _LARGE_INTEGER,
+        DWORD,
+        ctypes.POINTER(_ULARGE_INTEGER),
+    )
+
+    def decode_jpeg(data: bytes) -> tuple[bytes, int, int, int]:
+        """Decode JPEG bytes to raw pixels using Windows WIC.
+
+        Returns ``(raw_pixels, width, height, components)`` where
+        *components* is 1 for grayscale or 3 for RGB.
+        """
+        from _scanlib_accel import rgb_to_bgr
+
+        factory = _get_wic_factory()
+        stream = c_void_p()
+        decoder = c_void_p()
+        frame = c_void_p()
+        converter = c_void_p()
+
+        try:
+            # Create IStream and write JPEG data into it
+            _ole32.CreateStreamOnHGlobal(None, True, byref(stream))
+            written = ULONG()
+            _vtbl_call(
+                stream,
+                4,
+                _IStream_Write,
+                data,
+                len(data),
+                byref(written),
+            )
+            # Seek back to start
+            _vtbl_call(stream, 5, _IStream_Seek, _LARGE_INTEGER(0), 0, None)
+
+            # IWICImagingFactory::CreateDecoderFromStream (slot 5)
+            _CreateDecoder = ctypes.WINFUNCTYPE(
+                HRESULT,
+                c_void_p,
+                c_void_p,
+                ctypes.POINTER(_GUID),
+                DWORD,
+                ctypes.POINTER(c_void_p),
+            )
+            hr = _vtbl_call(
+                factory,
+                5,
+                _CreateDecoder,
+                stream,
+                None,
+                0,  # WICDecodeMetadataCacheOnDemand
+                byref(decoder),
+            )
+            if hr < 0:
+                raise RuntimeError(
+                    f"CreateDecoderFromStream failed: 0x{hr & 0xFFFFFFFF:08x}"
+                )
+
+            # IWICBitmapDecoder::GetFrame(0) (slot 9)
+            _GetFrame = ctypes.WINFUNCTYPE(
+                HRESULT, c_void_p, DWORD, ctypes.POINTER(c_void_p)
+            )
+            hr = _vtbl_call(decoder, 9, _GetFrame, 0, byref(frame))
+            if hr < 0:
+                raise RuntimeError(f"GetFrame failed: 0x{hr & 0xFFFFFFFF:08x}")
+
+            # Get size from frame: IWICBitmapSource::GetSize (slot 3)
+            _GetSize = ctypes.WINFUNCTYPE(
+                HRESULT, c_void_p, ctypes.POINTER(DWORD), ctypes.POINTER(DWORD)
+            )
+            w = DWORD()
+            h = DWORD()
+            hr = _vtbl_call(frame, 3, _GetSize, byref(w), byref(h))
+            if hr < 0:
+                raise RuntimeError(f"GetSize failed: 0x{hr & 0xFFFFFFFF:08x}")
+            width = w.value
+            height = h.value
+
+            # Get pixel format: IWICBitmapSource::GetPixelFormat (slot 4)
+            _GetPixelFormat = ctypes.WINFUNCTYPE(
+                HRESULT, c_void_p, ctypes.POINTER(_GUID)
+            )
+            pf = _GUID()
+            _vtbl_call(frame, 4, _GetPixelFormat, byref(pf))
+
+            # Determine target format
+            is_gray = (
+                pf.Data4[7] == _GUID_WICPixelFormat8bppGray.Data4[7]
+                and pf.Data1 == _GUID_WICPixelFormat8bppGray.Data1
+            )
+
+            if is_gray:
+                target_fmt = _GUID_WICPixelFormat8bppGray
+                components = 1
+                stride = width
+            else:
+                target_fmt = _GUID_WICPixelFormat24bppBGR
+                components = 3
+                stride = width * 3
+
+            # Create format converter:
+            # IWICImagingFactory::CreateFormatConverter (slot 10)
+            _CreateConverter = ctypes.WINFUNCTYPE(
+                HRESULT, c_void_p, ctypes.POINTER(c_void_p)
+            )
+            hr = _vtbl_call(factory, 10, _CreateConverter, byref(converter))
+            if hr < 0:
+                raise RuntimeError(
+                    f"CreateFormatConverter failed: 0x{hr & 0xFFFFFFFF:08x}"
+                )
+
+            # IWICFormatConverter::Initialize (slot 8)
+            _InitConverter = ctypes.WINFUNCTYPE(
+                HRESULT,
+                c_void_p,
+                c_void_p,
+                ctypes.POINTER(_GUID),
+                DWORD,
+                c_void_p,
+                ctypes.c_double,
+                DWORD,
+            )
+            hr = _vtbl_call(
+                converter,
+                8,
+                _InitConverter,
+                frame,
+                byref(target_fmt),
+                0,  # WICBitmapDitherTypeNone
+                None,
+                0.0,
+                0,  # WICBitmapPaletteTypeCustom
+            )
+            if hr < 0:
+                raise RuntimeError(
+                    f"FormatConverter.Initialize failed: 0x{hr & 0xFFFFFFFF:08x}"
+                )
+
+            # IWICBitmapSource::CopyPixels (slot 7)
+            buf_size = stride * height
+            buf = (ctypes.c_ubyte * buf_size)()
+            _CopyPixels = ctypes.WINFUNCTYPE(
+                HRESULT, c_void_p, c_void_p, DWORD, DWORD, ctypes.c_void_p
+            )
+            hr = _vtbl_call(converter, 7, _CopyPixels, None, stride, buf_size, buf)
+            if hr < 0:
+                raise RuntimeError(f"CopyPixels failed: 0x{hr & 0xFFFFFFFF:08x}")
+
+            result = bytes(buf)
+            # Convert BGR to RGB for color images
+            if components == 3:
+                result = rgb_to_bgr(result, width, height)
+            return result, width, height, components
+
+        finally:
+            _release(converter)
+            _release(frame)
+            _release(decoder)
+            _release(stream)
+
 else:
     # ------------------------------------------------------------------ #
     # Linux libjpeg encoder (compiled into _scanlib_accel C extension)    #
     # ------------------------------------------------------------------ #
 
+    from _scanlib_accel import decode_jpeg as _c_decode_jpeg
     from _scanlib_accel import encode_jpeg as _c_encode_jpeg
 
     def encode_jpeg(
@@ -478,3 +752,11 @@ else:
         """Encode raw pixels as baseline JPEG using libjpeg."""
         components = 3 if color_mode == ColorMode.COLOR else 1
         return _c_encode_jpeg(pixels, width, height, components, quality)
+
+    def decode_jpeg(data: bytes) -> tuple[bytes, int, int, int]:
+        """Decode JPEG bytes to raw pixels using libjpeg.
+
+        Returns ``(raw_pixels, width, height, components)`` where
+        *components* is 1 for grayscale or 3 for RGB.
+        """
+        return _c_decode_jpeg(data)

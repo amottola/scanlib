@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from collections.abc import Iterator
 from importlib.metadata import version
 
 __version__ = version("scanlib")
@@ -54,6 +55,104 @@ __all__ = [
     "BackendNotAvailableError",
 ]
 
+
+# ---------------------------------------------------------------------------
+# Composite backend — merges a platform backend with eSCL
+# ---------------------------------------------------------------------------
+
+
+class _CompositeBackend:
+    """Merges results from a platform backend and the eSCL backend.
+
+    ``list_scanners`` runs both backends' discovery in parallel and
+    deduplicates by IP address.  Each scanner's ``_backend_impl`` points
+    to whichever backend discovered it.
+    """
+
+    def __init__(self, platform_backend: ScanBackend) -> None:
+        from .backends._escl import EsclBackend
+
+        self._platform = platform_backend
+        self._escl = EsclBackend()
+
+    def list_scanners(
+        self,
+        timeout: float = DISCOVERY_TIMEOUT,
+        cancel: threading.Event | None = None,
+    ) -> list[Scanner]:
+        # Run both discoveries in parallel
+        platform_box: list[list[Scanner]] = [[]]
+        escl_box: list[list[Scanner]] = [[]]
+
+        def _run_platform() -> None:
+            try:
+                platform_box[0] = self._platform.list_scanners(
+                    timeout=timeout, cancel=cancel
+                )
+            except Exception:
+                platform_box[0] = []
+
+        def _run_escl() -> None:
+            try:
+                escl_box[0] = self._escl.list_scanners(timeout=timeout, cancel=cancel)
+            except Exception:
+                escl_box[0] = []
+
+        t_platform = threading.Thread(target=_run_platform, daemon=True)
+        t_escl = threading.Thread(target=_run_escl, daemon=True)
+        t_platform.start()
+        t_escl.start()
+        t_platform.join(timeout=timeout + 2)
+        t_escl.join(timeout=timeout + 2)
+
+        if cancel is not None and cancel.is_set():
+            return []
+
+        platform_scanners = platform_box[0]
+        escl_scanners = escl_box[0]
+
+        if not escl_scanners:
+            return platform_scanners
+
+        # Collect IPs from platform scanners for deduplication
+        from ._mdns import extract_ip_from_uri
+
+        platform_ips: set[str] = set()
+        for s in platform_scanners:
+            ip = extract_ip_from_uri(s.name)
+            if ip:
+                platform_ips.add(ip)
+
+        # Add eSCL scanners not already found by the platform backend
+        escl_ips = self._escl.get_scanner_ips()
+        for s in escl_scanners:
+            ip = escl_ips.get(s.id)
+            if ip and ip in platform_ips:
+                continue  # already discovered by platform backend
+            platform_scanners.append(s)
+
+        return platform_scanners
+
+    # Delegate remaining methods to the scanner's own _backend_impl
+    def open_scanner(self, scanner: Scanner) -> None:
+        scanner._backend_impl.open_scanner(scanner)
+
+    def close_scanner(self, scanner: Scanner) -> None:
+        scanner._backend_impl.close_scanner(scanner)
+
+    def scan_pages(
+        self, scanner: Scanner, options: ScanOptions
+    ) -> Iterator[ScannedPage]:
+        return scanner._backend_impl.scan_pages(scanner, options)
+
+    def abort_scan(self, scanner: Scanner) -> None:
+        scanner._backend_impl.abort_scan(scanner)
+
+
+# ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+
 _backend: ScanBackend | None = None
 
 
@@ -66,7 +165,7 @@ def _get_backend() -> ScanBackend:
     if sys.platform == "linux":
         from .backends._sane import SaneBackend
 
-        _backend = SaneBackend()
+        _backend = _CompositeBackend(SaneBackend())
 
     elif sys.platform == "darwin":
         from .backends._macos import MacOSBackend
@@ -76,7 +175,7 @@ def _get_backend() -> ScanBackend:
     elif sys.platform == "win32":
         from .backends._wia import WiaBackend
 
-        _backend = WiaBackend()
+        _backend = _CompositeBackend(WiaBackend())
 
     else:
         raise BackendNotAvailableError(f"Unsupported platform: {sys.platform}")

@@ -339,7 +339,7 @@ class Scanner:
 
     @property
     def backend(self) -> str:
-        """Backend identifier: ``"sane"``, ``"imagecapture"``, or ``"wia"``."""
+        """Backend identifier: ``"sane"``, ``"imagecapture"``, ``"wia"``, or ``"escl"``."""
         return self._backend
 
     @property

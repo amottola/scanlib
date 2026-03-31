@@ -704,6 +704,79 @@ static PyObject *py_encode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
     return result;
 }
 
+/* ------------------------------------------------------------------ */
+/* decode_jpeg (Linux only, requires libjpeg)                         */
+/* ------------------------------------------------------------------ */
+
+static PyObject *py_decode_jpeg(PyObject *Py_UNUSED(self), PyObject *args) {
+    const char *data;
+    Py_ssize_t data_len;
+
+    if (!PyArg_ParseTuple(args, "y#", &data, &data_len))
+        return NULL;
+
+    if (data_len < 2) {
+        PyErr_SetString(PyExc_ValueError, "data too short for JPEG");
+        return NULL;
+    }
+
+    struct jpeg_decompress_struct cinfo;
+    struct my_error_mgr jerr;
+    volatile PyThreadState *gil_state = NULL;
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = my_error_exit;
+
+    if (setjmp(jerr.setjmp_buffer)) {
+        if (gil_state)
+            PyEval_RestoreThread((PyThreadState *)gil_state);
+        jpeg_destroy_decompress(&cinfo);
+        PyErr_SetString(PyExc_RuntimeError, "libjpeg decoding error");
+        return NULL;
+    }
+
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, (const unsigned char *)data, (unsigned long)data_len);
+    jpeg_read_header(&cinfo, TRUE);
+
+    /* Force RGB or grayscale output */
+    if (cinfo.num_components == 1) {
+        cinfo.out_color_space = JCS_GRAYSCALE;
+    } else {
+        cinfo.out_color_space = JCS_RGB;
+    }
+
+    jpeg_start_decompress(&cinfo);
+
+    int width = (int)cinfo.output_width;
+    int height = (int)cinfo.output_height;
+    int components = (int)cinfo.output_components;
+    Py_ssize_t row_stride = (Py_ssize_t)width * components;
+    Py_ssize_t total = row_stride * height;
+
+    PyObject *result = PyBytes_FromStringAndSize(NULL, total);
+    if (!result) {
+        jpeg_destroy_decompress(&cinfo);
+        return NULL;
+    }
+
+    unsigned char *dst = (unsigned char *)PyBytes_AsString(result);
+
+    gil_state = PyEval_SaveThread();
+    while (cinfo.output_scanline < cinfo.output_height) {
+        unsigned char *row = dst + (Py_ssize_t)cinfo.output_scanline * row_stride;
+        JSAMPROW row_ptr = (JSAMPROW)row;
+        jpeg_read_scanlines(&cinfo, &row_ptr, 1);
+    }
+    PyEval_RestoreThread((PyThreadState *)gil_state);
+    gil_state = NULL;
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+
+    return Py_BuildValue("(Niii)", result, width, height, components);
+}
+
 #endif /* HAVE_JPEGLIB */
 
 /* ------------------------------------------------------------------ */
@@ -741,6 +814,10 @@ static PyMethodDef methods[] = {
     {"encode_jpeg", py_encode_jpeg, METH_VARARGS,
      "encode_jpeg(data, width, height, num_components, quality) -> bytes\n"
      "Encode raw pixels to JPEG using libjpeg."},
+    {"decode_jpeg", py_decode_jpeg, METH_VARARGS,
+     "decode_jpeg(data) -> tuple[bytes, int, int, int]\n"
+     "Decode JPEG bytes to raw pixels. Returns "
+     "(raw_data, width, height, num_components)."},
 #endif
     {NULL, NULL, 0, NULL}
 };
