@@ -228,6 +228,28 @@ class _BrowseResult:
     srvs: dict[str, _SrvInfo] = dataclasses.field(default_factory=dict)
 
 
+def _local_ipv4_addresses() -> list[str]:
+    """Return the IPv4 addresses of all local network interfaces."""
+    addrs: list[str] = []
+    try:
+        for info in socket.getaddrinfo(
+            socket.gethostname(), None, socket.AF_INET, socket.SOCK_DGRAM
+        ):
+            addr = info[4][0]
+            if addr and not addr.startswith("127."):
+                addrs.append(addr)
+    except OSError:
+        pass
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for a in addrs:
+        if a not in seen:
+            seen.add(a)
+            unique.append(a)
+    return unique
+
+
 def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
     """Send mDNS queries and collect responses.
 
@@ -248,20 +270,52 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             except OSError:
                 pass
-        sock.bind(("", _MDNS_PORT))
 
-        # Join multicast group
-        mreq = struct.pack(
-            "4s4s",
-            socket.inet_aton(_MDNS_ADDR),
-            socket.inet_aton("0.0.0.0"),
-        )
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        # Try binding to port 5353 for standard mDNS multicast responses.
+        # Fall back to an ephemeral port if 5353 is already taken (common
+        # on Windows when Bonjour or another mDNS responder is running).
+        # One-shot queries from a non-5353 port still receive unicast
+        # responses per RFC 6762 §5.1.
+        try:
+            sock.bind(("", _MDNS_PORT))
+        except OSError:
+            sock.bind(("", 0))
+
+        # Join multicast group on all local interfaces.  With only
+        # INADDR_ANY the OS picks a single interface which may be wrong
+        # on machines with Hyper-V, VPN, Docker, or WSL adapters.
+        local_addrs = _local_ipv4_addresses()
+        mdns_group = socket.inet_aton(_MDNS_ADDR)
+        if local_addrs:
+            for addr in local_addrs:
+                try:
+                    mreq = struct.pack("4s4s", mdns_group, socket.inet_aton(addr))
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                except OSError:
+                    pass
+        else:
+            # Fallback: join on the default interface
+            mreq = struct.pack("4s4s", mdns_group, socket.inet_aton("0.0.0.0"))
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
         sock.setblocking(False)
 
-        # Send PTR query
+        # Send PTR query on each interface so scanners on any subnet
+        # see it.  IP_MULTICAST_IF controls the outgoing interface.
         query = _build_query(*_SERVICE_TYPES)
-        sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
+        if local_addrs:
+            for addr in local_addrs:
+                try:
+                    sock.setsockopt(
+                        socket.IPPROTO_IP,
+                        socket.IP_MULTICAST_IF,
+                        socket.inet_aton(addr),
+                    )
+                    sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
+                except OSError:
+                    pass
+        else:
+            sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
 
         # Collect responses with early exit: once we've received at
         # least one response, stop after a short quiet period (no new
