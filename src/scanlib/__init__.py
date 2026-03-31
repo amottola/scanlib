@@ -82,7 +82,7 @@ class _CompositeBackend:
         timeout: float = DISCOVERY_TIMEOUT,
         cancel: threading.Event | None = None,
     ) -> list[Scanner]:
-        # Run both discoveries in parallel
+        # Run both discoveries in parallel.
         platform_box: list[list[Scanner]] = [[]]
         escl_box: list[list[Scanner]] = [[]]
 
@@ -104,8 +104,13 @@ class _CompositeBackend:
         t_escl = threading.Thread(target=_run_escl, daemon=True)
         t_platform.start()
         t_escl.start()
-        t_platform.join(timeout=timeout + 2)
+
+        # Wait for eSCL first (fast, ~4s max), then give the platform
+        # backend a short grace period to finish.  Don't block on a
+        # slow platform backend when eSCL already has results.
         t_escl.join(timeout=timeout + 2)
+        if t_platform.is_alive():
+            t_platform.join(timeout=2.0)
 
         if cancel is not None and cancel.is_set():
             return []

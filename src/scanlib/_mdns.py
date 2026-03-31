@@ -12,6 +12,7 @@ import dataclasses
 import select
 import socket
 import struct
+import sys
 import threading
 import time
 from urllib.parse import urlparse
@@ -281,11 +282,16 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
         except OSError:
             sock.bind(("", 0))
 
-        # Join multicast group on all local interfaces.  With only
-        # INADDR_ANY the OS picks a single interface which may be wrong
-        # on machines with Hyper-V, VPN, Docker, or WSL adapters.
-        local_addrs = _local_ipv4_addresses()
+        # Join multicast group.  On Windows, join on each local
+        # interface explicitly — with only INADDR_ANY the OS may pick
+        # the wrong one on machines with Hyper-V, VPN, or WSL adapters.
+        # On macOS/Linux, INADDR_ANY works correctly.
         mdns_group = socket.inet_aton(_MDNS_ADDR)
+        if sys.platform == "win32":
+            local_addrs = _local_ipv4_addresses()
+        else:
+            local_addrs = []
+
         if local_addrs:
             for addr in local_addrs:
                 try:
@@ -294,14 +300,13 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
                 except OSError:
                     pass
         else:
-            # Fallback: join on the default interface
             mreq = struct.pack("4s4s", mdns_group, socket.inet_aton("0.0.0.0"))
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         sock.setblocking(False)
 
-        # Send PTR query on each interface so scanners on any subnet
-        # see it.  IP_MULTICAST_IF controls the outgoing interface.
+        # Send PTR query.  On Windows, send on each interface so
+        # scanners on any subnet see it.
         query = _build_query(*_SERVICE_TYPES)
         if local_addrs:
             for addr in local_addrs:
