@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__, list_scanners
+from . import __version__, list_scanners, open_scanner
 from ._types import (
     ColorMode,
     ImageFormat,
@@ -28,25 +28,48 @@ from ._types import (
 # ---------------------------------------------------------------------------
 
 
-def _resolve_scanner(scanners: list[Scanner], selector: str) -> Scanner:
-    """Pick a scanner by numeric index, exact ID, or substring match."""
+def _open_by_selector(selector: str, timeout: float = 15.0) -> Scanner:
+    """Open a scanner by index, ID, or substring.
+
+    If *selector* looks like a scanner ID (contains ``:``) and is not a
+    bare numeric index, tries :func:`open_scanner` first to skip
+    discovery.  Falls back to :func:`list_scanners` otherwise.
+
+    Returns an **opened** scanner.
+    """
+    # Try direct open by ID when the selector looks like one
+    is_index = selector.isdigit()
+    if not is_index and ":" in selector:
+        try:
+            return open_scanner(selector)
+        except Exception:
+            pass  # fall back to discovery
+
+    # Discovery path
+    scanners = list_scanners(timeout=timeout)
+    if not scanners:
+        _err("No scanners found.")
+        sys.exit(1)
+
     # Try numeric index
-    try:
+    if is_index:
         idx = int(selector)
         if 0 <= idx < len(scanners):
-            return scanners[idx]
-    except ValueError:
-        pass
+            scanner = scanners[idx]
+            scanner.open()
+            return scanner
 
     # Exact ID match
     for s in scanners:
         if s.id == selector:
+            s.open()
             return s
 
     # Substring match on name or str()
     sel_lower = selector.lower()
     for s in scanners:
         if sel_lower in s.name.lower() or sel_lower in str(s).lower():
+            s.open()
             return s
 
     _err(f"Scanner not found: {selector!r}")
@@ -77,7 +100,7 @@ def _progress(percent: int) -> bool:
 
 
 def cmd_list(args: argparse.Namespace) -> None:
-    scanners = list_scanners()
+    scanners = list_scanners(timeout=args.timeout)
     if not scanners:
         _err("No scanners found.")
         sys.exit(1)
@@ -109,12 +132,7 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 
 def cmd_info(args: argparse.Namespace) -> None:
-    scanners = list_scanners()
-    if not scanners:
-        _err("No scanners found.")
-        sys.exit(1)
-
-    scanner = _resolve_scanner(scanners, args.scanner)
+    scanner = _open_by_selector(args.scanner)
 
     with scanner:
         print(f"Scanner:  {scanner}")
@@ -152,13 +170,33 @@ def cmd_info(args: argparse.Namespace) -> None:
             print()
 
 
-def cmd_scan(args: argparse.Namespace) -> None:
-    scanners = list_scanners()
-    if not scanners:
-        _err("No scanners found.")
+def cmd_reset(args: argparse.Namespace) -> None:
+    scanner_id = args.scanner
+    if not scanner_id.startswith("escl:"):
+        _err("Reset is only supported for eSCL scanners (ID starts with escl:).")
         sys.exit(1)
 
-    scanner = _resolve_scanner(scanners, args.scanner)
+    from .backends._escl import _parse_escl_id
+
+    conn = _parse_escl_id(scanner_id)
+    if conn is None:
+        _err(f"Invalid eSCL scanner ID: {scanner_id}")
+        sys.exit(1)
+
+    status = conn.get_status()
+    _err(f"Scanner status: {status}")
+    cancelled = conn.cancel_active_jobs()
+    if cancelled:
+        _err(f"Cancelled {cancelled} active job(s).")
+        status = conn.get_status()
+        _err(f"Scanner status: {status}")
+    else:
+        _err("No active jobs found.")
+    conn.close()
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    scanner = _open_by_selector(args.scanner)
 
     with scanner:
         # Resolve defaults
@@ -240,6 +278,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 next_page=next_page,
                 image_format=image_format,
                 jpeg_quality=args.jpeg_quality,
+                bw_threshold=args.bw_threshold,
             )
         except ScanAborted:
             _err("Scan aborted.")
@@ -273,7 +312,13 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     # --- list ---
-    subparsers.add_parser("list", help="List available scanners")
+    p_list = subparsers.add_parser("list", help="List available scanners")
+    p_list.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="Discovery timeout in seconds (default: 15)",
+    )
 
     # --- info ---
     p_info = subparsers.add_parser("info", help="Show scanner capabilities")
@@ -338,6 +383,23 @@ def main() -> None:
         default=None,
         help="Number of pages or 'ask' for interactive prompting",
     )
+    p_scan.add_argument(
+        "--bw-threshold",
+        type=int,
+        default=128,
+        help="BW mode threshold 0-255: pixels >= value become white (default: 128)",
+    )
+
+    # --- reset ---
+    p_reset = subparsers.add_parser(
+        "reset", help="Cancel active jobs on an eSCL scanner"
+    )
+    p_reset.add_argument(
+        "-s",
+        "--scanner",
+        required=True,
+        help="eSCL scanner ID (e.g. escl:192.168.1.5:443)",
+    )
 
     args = parser.parse_args()
 
@@ -352,6 +414,8 @@ def main() -> None:
             cmd_info(args)
         elif args.command == "scan":
             cmd_scan(args)
+        elif args.command == "reset":
+            cmd_reset(args)
     except KeyboardInterrupt:
         _err("\nAborted.")
         sys.exit(130)

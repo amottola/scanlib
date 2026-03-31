@@ -376,6 +376,7 @@ def _safe_str(dev, attr: str) -> str | None:
 
 
 class MacOSBackend:
+    backend_name = "imagecapture"
     """macOS scanning backend using ImageCaptureCore.
 
     Thread-safe: a lock serialises access.  All work runs on a background
@@ -503,8 +504,30 @@ class MacOSBackend:
         return scanners
 
     def open_scanner(self, scanner: Scanner) -> None:
+        # If the device isn't cached yet (open_scanner called without
+        # prior list_scanners), run a quick targeted discovery.
+        if scanner.id not in self._devices:
+            self._discover_device(scanner.id)
         with self._lock:
             return self._call(self._open_scanner_impl, scanner)
+
+    def _discover_device(self, scanner_id: str, timeout: float = 10.0) -> None:
+        """Run ICC discovery until *scanner_id* appears or timeout."""
+
+        def _discover():
+            delegate = self._on_main(self._ensure_browser)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                # Check if device appeared
+                for dev in delegate.scanners:
+                    uid = _safe_str(dev, "UUIDString") or dev.name()
+                    if uid == scanner_id:
+                        self._devices[uid] = dev
+                        return
+                time.sleep(0.3)
+
+        with self._lock:
+            self._call(_discover)
 
     def close_scanner(self, scanner: Scanner) -> None:
         with self._lock:
@@ -549,7 +572,7 @@ class MacOSBackend:
                     name=dev.name(),
                     vendor=_safe_str(dev, "manufacturer"),
                     model=None,
-                    backend="imagecapture",
+                    backend=self.backend_name,
                     scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
                     location=_safe_str(dev, "locationDescription"),
                 )

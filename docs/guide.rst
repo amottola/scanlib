@@ -40,6 +40,43 @@ Customize the scan with keyword arguments:
            source=ScanSource.FLATBED,
        )
 
+Black & White Threshold
+-----------------------
+
+When scanning in BW mode, grayscale pixels are converted to 1-bit
+black or white using a threshold.  Pixels with a value **≥ threshold**
+become white; below become black.  The default is 128:
+
+.. code-block:: python
+
+   with scanners[0] as scanner:
+       # Lower threshold = more white (lighter output)
+       doc = scanner.scan(color_mode=ColorMode.BW, bw_threshold=100)
+
+       # Higher threshold = more black (darker output)
+       doc = scanner.scan(color_mode=ColorMode.BW, bw_threshold=180)
+
+The threshold applies both to ``scan()``/``scan_pages()`` and to
+``build_pdf()`` when converting grayscale pages to BW.
+
+Opening a Scanner by ID
+-----------------------
+
+If you already know a scanner's ID from a previous discovery, you can
+open it directly without running ``list_scanners()`` again:
+
+.. code-block:: python
+
+   import scanlib
+
+   scanner = scanlib.open_scanner("escl:192.168.1.5:443")
+   with scanner:
+       doc = scanner.scan()
+
+This skips the mDNS/platform discovery step and connects immediately.
+On macOS with native ImageCaptureCore, a quick targeted discovery is
+run behind the scenes to resolve the UUID to a device object.
+
 Scanner Capabilities
 --------------------
 

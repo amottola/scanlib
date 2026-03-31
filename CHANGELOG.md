@@ -16,12 +16,21 @@
 - **JPEG decoding** — platform-native JPEG decoders added to `_jpeg.py`
   (ImageIO on macOS, WIC on Windows, libjpeg on Linux) for the eSCL
   backend.
+- **`scanlib.open_scanner(id)`** — open a scanner directly by its ID
+  without running discovery.  Instant for eSCL and SANE; runs quick
+  targeted discovery on macOS ImageCaptureCore.
+- **`scanlib reset`** — CLI command to cancel stale eSCL scan jobs.
+- **Configurable BW threshold** — `bw_threshold` parameter (0–255) on
+  `scan()`, `scan_pages()`, and `build_pdf()` controls the
+  grayscale-to-BW cutoff.  CLI: `--bw-threshold`.  Default is 128.
 
 ### Improvements
 
 - SANE and WIA backends no longer discover network scanners — this is
   now handled by the eSCL backend via a composite backend that runs
   both in parallel and deduplicates by IP.
+- mDNS browse exits early after a 0.5s quiet period instead of waiting
+  the full timeout.
 
 ## 1.1.0
 

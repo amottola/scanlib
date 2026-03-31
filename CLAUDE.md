@@ -41,7 +41,7 @@ A required CPython C extension provides pixel conversion, BMP parsing, and JPEG 
 
 - **`rgb_to_gray`** — RGB to grayscale conversion using integer luminance formula
 - **`rgb_to_bgr`** — RGB to BGR channel swap (used by WIC encoder on Windows)
-- **`gray_to_bw`** — grayscale to 1-bit packed conversion (threshold at 128)
+- **`gray_to_bw`** — grayscale to 1-bit packed conversion (configurable threshold, default 128)
 - **`bw_to_gray`** — 1-bit packed to 8-bit grayscale unpacking (0→0, 1→255)
 - **`trim_rows`** — removes row padding from raw scan data
 - **`rotate_pixels`** — clockwise pixel rotation (90°/180°/270°) for 8-bit grayscale, RGB, and 1-bit BW

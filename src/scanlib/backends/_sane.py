@@ -786,6 +786,7 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
 
 
 class SaneBackend:
+    backend_name = "sane"
     """Linux scanning backend using SANE (via ctypes)."""
 
     def __init__(self) -> None:
@@ -841,7 +842,7 @@ class SaneBackend:
                     name=dev_info[0],
                     vendor=dev_info[1] or None,
                     model=dev_info[2] or None,
-                    backend="sane",
+                    backend=self.backend_name,
                     _backend_impl=self,
                 )
             )

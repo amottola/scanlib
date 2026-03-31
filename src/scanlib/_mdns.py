@@ -263,13 +263,21 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
         query = _build_query(*_SERVICE_TYPES)
         sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
 
+        # Collect responses with early exit: once we've received at
+        # least one response, stop after a short quiet period (no new
+        # packets) rather than waiting the full timeout.
+        quiet_period = 0.5
+        got_response = False
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            readable, _, _ = select.select([sock], [], [], remaining)
+            wait = min(remaining, quiet_period) if got_response else remaining
+            readable, _, _ = select.select([sock], [], [], wait)
             if not readable:
+                if got_response:
+                    break  # quiet period elapsed — done
                 continue
             try:
                 data, _addr = sock.recvfrom(4096)
@@ -281,6 +289,8 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
             for k, v in addrs.items():
                 result.addrs.setdefault(k, []).extend(v)
             result.srvs.update(srvs)
+            if ptrs:
+                got_response = True
 
     except OSError:
         pass

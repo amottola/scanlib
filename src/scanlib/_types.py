@@ -114,6 +114,7 @@ class ScanOptions:
     scan_area: ScanArea | None = None
     source: ScanSource | None = None
     progress: Callable[[int], bool] | None = None
+    bw_threshold: int = 128
 
 
 @dataclass(frozen=True)
@@ -422,6 +423,7 @@ class Scanner:
         source: ScanSource | None = None,
         progress: Callable[[int], bool] | None = None,
         next_page: Callable[[int], bool] | None = None,
+        bw_threshold: int = 128,
     ) -> Iterator[ScannedPage]:
         """Scan and yield individual :class:`ScannedPage` objects.
 
@@ -433,6 +435,11 @@ class Scanner:
         each page is **yielded before** the callback is invoked, so the
         caller can preview or process the page before deciding whether
         to continue scanning.
+
+        *bw_threshold* (0–255) controls the grayscale-to-BW cutoff when
+        *color_mode* is :attr:`ColorMode.BW`.  Pixels with a value
+        **≥ threshold** become white; below become black.  Default is
+        128.
 
         Parameters are the same as :meth:`scan` except that
         *image_format* and *jpeg_quality* are not applicable here.
@@ -486,6 +493,7 @@ class Scanner:
             scan_area=scan_area,
             source=source,
             progress=progress,
+            bw_threshold=bw_threshold,
         )
         return self._scan_pages_iter(options, source, next_page)
 
@@ -524,6 +532,7 @@ class Scanner:
         next_page: Callable[[int], bool] | None = None,
         image_format: ImageFormat | None = None,
         jpeg_quality: int = 85,
+        bw_threshold: int = 128,
     ) -> ScannedDocument:
         """Scan a document and return PDF bytes.
 
@@ -543,6 +552,9 @@ class Scanner:
 
         *jpeg_quality* (1–100) controls JPEG compression quality; ignored
         when *image_format* is PNG.
+
+        *bw_threshold* (0–255) controls the grayscale-to-BW cutoff when
+        *color_mode* is :attr:`ColorMode.BW`.  Default is 128.
         """
         pages = self.scan_pages(
             dpi=dpi,
@@ -551,6 +563,7 @@ class Scanner:
             source=source,
             progress=progress,
             next_page=next_page,
+            bw_threshold=bw_threshold,
         )
         return build_pdf(
             pages,
@@ -558,6 +571,7 @@ class Scanner:
             color_mode=color_mode,
             image_format=image_format,
             jpeg_quality=jpeg_quality,
+            bw_threshold=bw_threshold,
         )
 
     def __repr__(self) -> str:
@@ -671,6 +685,7 @@ def build_pdf(
     color_mode: ColorMode = ColorMode.COLOR,
     image_format: ImageFormat | None = None,
     jpeg_quality: int = 85,
+    bw_threshold: int = 128,
 ) -> ScannedDocument:
     """Build a PDF from scanned pages.
 
@@ -684,6 +699,9 @@ def build_pdf(
     1-bit packs much smaller than JPEG) and JPEG for everything else.
     *jpeg_quality* (1–100) controls JPEG compression; it is ignored
     when the format is PNG.
+
+    *bw_threshold* (0–255) controls the grayscale-to-BW cutoff when
+    *color_mode* is :attr:`ColorMode.BW`.  Default is 128.
 
     Returns a :class:`ScannedDocument` containing the PDF bytes.
     """
@@ -728,7 +746,7 @@ def build_pdf(
                 mode = ColorMode.GRAY
             else:
                 if mode == ColorMode.GRAY:
-                    raw_pixels = gray_to_bw(raw_pixels, w, h)
+                    raw_pixels = gray_to_bw(raw_pixels, w, h, bw_threshold)
                 mode = ColorMode.BW
 
         # Encode image data

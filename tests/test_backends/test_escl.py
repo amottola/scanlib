@@ -154,6 +154,74 @@ class TestParseCapabilitiesMinimal:
         assert sources[0].resolutions == [300]
 
 
+class TestParseCapabilitiesNested:
+    """Test with real-world nested XML (PlatenInputCaps/SettingProfiles)."""
+
+    _NESTED_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScannerCapabilities
+    xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03"
+    xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <scan:Platen>
+    <scan:PlatenInputCaps>
+      <scan:MinWidth>16</scan:MinWidth>
+      <scan:MaxWidth>2480</scan:MaxWidth>
+      <scan:MinHeight>16</scan:MinHeight>
+      <scan:MaxHeight>3508</scan:MaxHeight>
+      <scan:SettingProfiles>
+        <scan:SettingProfile>
+          <scan:ColorModes>
+            <scan:ColorMode>BlackAndWhite1</scan:ColorMode>
+            <scan:ColorMode>Grayscale8</scan:ColorMode>
+            <scan:ColorMode>RGB24</scan:ColorMode>
+          </scan:ColorModes>
+          <scan:DiscreteResolutions>
+            <scan:DiscreteResolution>
+              <scan:XResolution>100</scan:XResolution>
+              <scan:YResolution>100</scan:YResolution>
+            </scan:DiscreteResolution>
+            <scan:DiscreteResolution>
+              <scan:XResolution>200</scan:XResolution>
+              <scan:YResolution>200</scan:YResolution>
+            </scan:DiscreteResolution>
+            <scan:DiscreteResolution>
+              <scan:XResolution>300</scan:XResolution>
+              <scan:YResolution>300</scan:YResolution>
+            </scan:DiscreteResolution>
+            <scan:DiscreteResolution>
+              <scan:XResolution>600</scan:XResolution>
+              <scan:YResolution>600</scan:YResolution>
+            </scan:DiscreteResolution>
+          </scan:DiscreteResolutions>
+        </scan:SettingProfile>
+      </scan:SettingProfiles>
+    </scan:PlatenInputCaps>
+  </scan:Platen>
+</scan:ScannerCapabilities>
+"""
+
+    def test_resolutions_found(self):
+        root = ET.fromstring(self._NESTED_XML)
+        sources, _, _ = _parse_capabilities(root)
+        flatbed = sources[0]
+        assert flatbed.resolutions == [100, 200, 300, 600]
+
+    def test_color_modes_found(self):
+        root = ET.fromstring(self._NESTED_XML)
+        sources, _, _ = _parse_capabilities(root)
+        flatbed = sources[0]
+        assert ColorMode.BW in flatbed.color_modes
+        assert ColorMode.GRAY in flatbed.color_modes
+        assert ColorMode.COLOR in flatbed.color_modes
+
+    def test_max_scan_area_found(self):
+        root = ET.fromstring(self._NESTED_XML)
+        sources, _, _ = _parse_capabilities(root)
+        flatbed = sources[0]
+        assert flatbed.max_scan_area is not None
+        assert abs(flatbed.max_scan_area.width - 2100) <= 1
+
+
 class TestParseCapabilitiesResolutionRange:
     """Test resolution range parsing and normalization."""
 
@@ -226,12 +294,14 @@ class TestBuildScanSettings:
         assert int(xoff.text) == _tenths_mm_to_escl(100)
         assert int(yoff.text) == _tenths_mm_to_escl(200)
 
-    def test_bw_mode(self):
+    def test_bw_mode_requests_grayscale(self):
+        # BW is scanned as grayscale and converted client-side,
+        # because many scanners reject BlackAndWhite1 via eSCL.
         options = ScanOptions(dpi=300, color_mode=ColorMode.BW)
         xml = _build_scan_settings(options, "Platen", None)
         root = ET.fromstring(xml)
         ns = "http://schemas.hp.com/imaging/escl/2011/05/03"
-        assert root.find(f"{{{ns}}}ColorMode").text == "BlackAndWhite1"
+        assert root.find(f"{{{ns}}}ColorMode").text == "Grayscale8"
 
     def test_document_format_is_jpeg(self):
         options = ScanOptions(dpi=300, color_mode=ColorMode.COLOR)

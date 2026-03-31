@@ -79,6 +79,11 @@ Options
    Number of flatbed pages to scan, or ``ask`` for interactive
    prompting between pages.  Ignored when source is feeder.
 
+``--bw-threshold``
+   BW mode threshold from 0 to 255.  Pixels with a grayscale value
+   ≥ this become white, below become black.  Default: 128.
+   Lower values produce lighter output, higher values darker.
+
 Multi-Page Scanning
 ^^^^^^^^^^^^^^^^^^^
 
@@ -111,3 +116,16 @@ A summary is printed when the scan completes:
    Scanning with HP Officejet @ 300 DPI, color...
    Scanning... 100%
    Saved 1 page(s) to scan.pdf (54321 bytes, 2480x3508 px)
+
+Resetting an eSCL Scanner
+-------------------------
+
+If an eSCL scanner gets stuck (e.g. due to a stale scan job), you can
+cancel active jobs:
+
+.. code-block:: bash
+
+   scanlib reset -s escl:192.168.1.5:443
+
+This checks the scanner status, finds any active jobs, and cancels
+them.  Only supported for eSCL scanners.

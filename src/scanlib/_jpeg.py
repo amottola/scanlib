@@ -108,6 +108,7 @@ if sys.platform == "darwin":
     _kCFStringEncodingUTF8 = 0x08000100
     _kCFNumberDoubleType = 13
     _kCGImageAlphaNone = 0
+    _kCGImageAlphaNoneSkipLast = 5
 
     _jpeg_type_str = _cf.CFStringCreateWithCString(
         None,
@@ -217,22 +218,12 @@ if sys.platform == "darwin":
     _cg.CGImageGetHeight.argtypes = [ctypes.c_void_p]
     _cg.CGImageGetBitsPerPixel.restype = ctypes.c_size_t
     _cg.CGImageGetBitsPerPixel.argtypes = [ctypes.c_void_p]
-    _cg.CGBitmapContextCreate.restype = ctypes.c_void_p
-    _cg.CGBitmapContextCreate.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_size_t,
-        ctypes.c_size_t,
-        ctypes.c_size_t,
-        ctypes.c_size_t,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-    ]
-    _cg.CGContextDrawImage.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_double * 4,  # CGRect
-        ctypes.c_void_p,
-    ]
-    _cg.CGContextRelease.argtypes = [ctypes.c_void_p]
+    _cg.CGImageGetBytesPerRow.restype = ctypes.c_size_t
+    _cg.CGImageGetBytesPerRow.argtypes = [ctypes.c_void_p]
+    _cg.CGImageGetDataProvider.restype = ctypes.c_void_p
+    _cg.CGImageGetDataProvider.argtypes = [ctypes.c_void_p]
+    _cg.CGDataProviderCopyData.restype = ctypes.c_void_p
+    _cg.CGDataProviderCopyData.argtypes = [ctypes.c_void_p]
 
     def decode_jpeg(data: bytes) -> tuple[bytes, int, int, int]:
         """Decode JPEG bytes to raw pixels using macOS ImageIO.
@@ -258,33 +249,44 @@ if sys.platform == "darwin":
                     width = _cg.CGImageGetWidth(image)
                     height = _cg.CGImageGetHeight(image)
                     bpp = _cg.CGImageGetBitsPerPixel(image)
+                    row_bytes = _cg.CGImageGetBytesPerRow(image)
+                    src_components = bpp // 8
 
-                    if bpp <= 8:
+                    # Get raw pixel data directly from the decoded CGImage
+                    provider = _cg.CGImageGetDataProvider(image)
+                    if not provider:
+                        raise RuntimeError("CGImageGetDataProvider failed")
+                    pixel_cf = _cg.CGDataProviderCopyData(provider)
+                    if not pixel_cf:
+                        raise RuntimeError("CGDataProviderCopyData failed")
+
+                    try:
+                        length = _cf.CFDataGetLength(pixel_cf)
+                        ptr = _cf.CFDataGetBytePtr(pixel_cf)
+                        raw = ctypes.string_at(ptr, length)
+                    finally:
+                        _cf.CFRelease(pixel_cf)
+
+                    if src_components <= 1:
                         components = 1
-                        cs = _cg.CGColorSpaceCreateWithName(_kCGColorSpaceGenericGray)
-                        bitmap_info = _kCGImageAlphaNone
+                        expected_row = width
                     else:
                         components = 3
-                        cs = _cg.CGColorSpaceCreateWithName(_kCGColorSpaceSRGB)
-                        bitmap_info = _kCGImageAlphaNone
+                        expected_row = width * src_components
 
-                    row_bytes = width * components
-                    buf_size = row_bytes * height
-                    buf = (ctypes.c_ubyte * buf_size)()
+                    # Strip row padding if stride != expected
+                    if row_bytes != expected_row:
+                        from _scanlib_accel import trim_rows
 
-                    ctx = _cg.CGBitmapContextCreate(
-                        buf, width, height, 8, row_bytes, cs, bitmap_info
-                    )
-                    _cg.CGColorSpaceRelease(cs)
+                        raw = trim_rows(raw, height, row_bytes, expected_row)
 
-                    if not ctx:
-                        raise RuntimeError("CGBitmapContextCreate failed")
+                    # Strip extra channels (e.g. RGBX → RGB)
+                    if src_components > 3:
+                        from _scanlib_accel import strip_alpha
 
-                    rect = (ctypes.c_double * 4)(0, 0, width, height)
-                    _cg.CGContextDrawImage(ctx, rect, image)
-                    _cg.CGContextRelease(ctx)
+                        raw = strip_alpha(raw, width, height, src_components)
 
-                    return bytes(buf), width, height, components
+                    return raw, width, height, components
                 finally:
                     _cg.CGImageRelease(image)
             finally:

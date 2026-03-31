@@ -839,6 +839,7 @@ class _TransferCallback(COMObject):
 
 
 class WiaBackend:
+    backend_name = "wia"
     """Windows scanning backend using WIA 2.0 low-level COM interfaces.
 
     Thread-safe: all operations execute on a dedicated STA worker thread
@@ -987,7 +988,7 @@ class WiaBackend:
                 name=str(name),
                 vendor=None,
                 model=None,
-                backend="wia",
+                backend=self.backend_name,
                 scanner_id=str(dev_id),
             )
             scanners.append(scanner)

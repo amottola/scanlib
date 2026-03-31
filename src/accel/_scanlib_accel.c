@@ -99,10 +99,16 @@ static PyObject *py_rgb_to_bgr(PyObject *Py_UNUSED(self), PyObject *args) {
 static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
     const char *data;
     Py_ssize_t data_len;
-    int width, height;
+    int width, height, threshold = 128;
 
-    if (!PyArg_ParseTuple(args, "y#ii", &data, &data_len, &width, &height))
+    if (!PyArg_ParseTuple(args, "y#ii|i", &data, &data_len, &width, &height,
+                          &threshold))
         return NULL;
+
+    if (threshold < 0 || threshold > 255) {
+        PyErr_SetString(PyExc_ValueError, "threshold must be 0-255");
+        return NULL;
+    }
 
     Py_ssize_t count = (Py_ssize_t)width * height;
     if (data_len < count) {
@@ -130,7 +136,7 @@ static PyObject *py_gray_to_bw(PyObject *Py_UNUSED(self), PyObject *args) {
             int bits = width - x;
             if (bits > 8) bits = 8;
             for (int bit = 0; bit < bits; bit++) {
-                if (src[src_off + x + bit] >= 64)
+                if (src[src_off + x + bit] >= threshold)
                     byte_val |= (unsigned char)(0x80 >> bit);
             }
             dst[dst_off + x / 8] = byte_val;
@@ -791,8 +797,9 @@ static PyMethodDef methods[] = {
      "rgb_to_bgr(data, width, height) -> bytes\n"
      "Convert 8-bit interleaved RGB to BGR (swap R and B channels)."},
     {"gray_to_bw", py_gray_to_bw, METH_VARARGS,
-     "gray_to_bw(data, width, height) -> bytes\n"
-     "Convert 8-bit grayscale to 1-bit packed (MSB first)."},
+     "gray_to_bw(data, width, height, threshold=128) -> bytes\n"
+     "Convert 8-bit grayscale to 1-bit packed (MSB first).\n"
+     "Pixels >= threshold become white (1), below become black (0)."},
     {"bw_to_gray", py_bw_to_gray, METH_VARARGS,
      "bw_to_gray(data, width, height) -> bytes\n"
      "Convert 1-bit packed (MSB first) to 8-bit grayscale."},

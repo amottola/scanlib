@@ -176,13 +176,25 @@ class TestRgbToGray:
 
 
 class TestGrayToBw:
-    def test_threshold(self):
-        # 8 pixels: values above and below 64
-        gray = bytes([0, 32, 63, 64, 128, 255, 0, 255])
+    def test_default_threshold(self):
+        # 8 pixels: values above and below default threshold (128)
+        gray = bytes([0, 32, 127, 128, 200, 255, 0, 255])
         result = gray_to_bw(gray, 8, 1)
-        # 0=black, 1=white. Pixels >= 64 become 1.
+        # 0=black, 1=white. Pixels >= 128 become 1.
         # Bits: 0,0,0,1,1,1,0,1 = 0b00011101 = 0x1D
         assert result == bytes([0x1D])
+
+    def test_custom_threshold(self):
+        gray = bytes([0, 32, 63, 64, 128, 255, 0, 255])
+        result = gray_to_bw(gray, 8, 1, 64)
+        # Pixels >= 64: 0,0,0,1,1,1,0,1 = 0x1D
+        assert result == bytes([0x1D])
+
+    def test_low_threshold(self):
+        gray = bytes([0, 1, 10, 50, 100, 200, 0, 255])
+        result = gray_to_bw(gray, 8, 1, 10)
+        # Pixels >= 10: 0,0,1,1,1,1,0,1 = 0b00111101 = 0x3D
+        assert result == bytes([0x3D])
 
     def test_row_padding(self):
         # 3 pixels wide -> 1 byte per row, 5 trailing bits zeroed

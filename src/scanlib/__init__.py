@@ -35,6 +35,7 @@ from ._types import (
 
 __all__ = [
     "list_scanners",
+    "open_scanner",
     "build_pdf",
     "DISCOVERY_TIMEOUT",
     "ColorMode",
@@ -206,3 +207,38 @@ def list_scanners(
     to start a session before scanning.
     """
     return _get_backend().list_scanners(timeout=timeout, cancel=cancel)
+
+
+def open_scanner(scanner_id: str) -> Scanner:
+    """Open a scanner directly by its ID, without discovery.
+
+    *scanner_id* is the :attr:`Scanner.id` string obtained from a
+    previous :func:`list_scanners` call (e.g. ``"escl:192.168.1.5:443"``
+    for eSCL, a SANE device URI, or a WIA device ID).
+
+    Returns an **opened** :class:`Scanner` ready for scanning.  The
+    caller must call :meth:`Scanner.close` (or use the context-manager
+    protocol) when done.
+
+    This avoids the latency of scanner discovery when the ID is already
+    known.
+    """
+    if scanner_id.startswith("escl:"):
+        from .backends._escl import EsclBackend
+
+        impl = EsclBackend()
+    else:
+        # Use the platform backend
+        top = _get_backend()
+        impl = top._platform if isinstance(top, _CompositeBackend) else top
+
+    scanner = Scanner(
+        name=scanner_id,
+        vendor=None,
+        model=None,
+        backend=impl.backend_name,
+        scanner_id=scanner_id,
+        _backend_impl=impl,
+    )
+    scanner.open()
+    return scanner
