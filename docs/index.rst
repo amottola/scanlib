@@ -4,13 +4,17 @@ scanlib
 A multiplatform document scanning library for Python.
 
 scanlib provides a unified API for document scanning across Linux (SANE),
-macOS (ImageCaptureCore), and Windows (WIA 2.0). It returns scanned
+macOS (ImageCaptureCore), and Windows (WIA 2.0), plus a cross-platform
+eSCL (AirScan) backend for network scanners. It returns scanned
 documents as PDF files and handles platform differences transparently.
 Scanned pages can be encoded as JPEG or lossless PNG. JPEG encoding uses
 platform-native encoders (ImageIO on macOS, WIC on Windows,
 libjpeg compiled into the C extension on Linux), PNG encoding
 uses stdlib ``zlib``, pixel conversion is handled by a bundled C
 extension, and PDF assembly uses only the standard library.
+
+scanlib also installs a ``scanlib`` command-line utility for listing
+scanners, viewing capabilities, and scanning from the shell.
 
 The project is hosted on `GitHub <https://github.com/amottola/scanlib>`_.
 
@@ -53,4 +57,5 @@ no external dependency).
    :maxdepth: 2
 
    guide
+   cli
    api

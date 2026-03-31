@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.0
+
+### New features
+
+- **eSCL (AirScan) backend** — network scanners are discovered via mDNS
+  and driven directly over HTTP/HTTPS using the eSCL protocol.  No OS-level
+  scanner drivers needed for network devices.  Enabled automatically on
+  Linux and Windows; opt-in on macOS via `SCANLIB_ESCL=1`.
+- **Command-line interface** — `scanlib list`, `scanlib info`, and
+  `scanlib scan` for listing scanners, viewing capabilities, and scanning
+  from the shell.  Installed as a console script via pip.  Supports all
+  scan options (DPI, color mode, source, scan area, format, quality,
+  multi-page) with progress reporting.
+- **JPEG decoding** — platform-native JPEG decoders added to `_jpeg.py`
+  (ImageIO on macOS, WIC on Windows, libjpeg on Linux) for the eSCL
+  backend.
+
+### Improvements
+
+- SANE and WIA backends no longer discover network scanners — this is
+  now handled by the eSCL backend via a composite backend that runs
+  both in parallel and deduplicates by IP.
+
 ## 1.1.0
 
 ### New features

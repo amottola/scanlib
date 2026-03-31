@@ -9,6 +9,8 @@ A multiplatform document scanning library for Python with platform-native scanni
 ## Features
 
 - **Cross-platform** — unified API across Windows (WIA 2.0), macOS (ImageCaptureCore), and Linux (SANE)
+- **eSCL / AirScan** — direct HTTP scanning of network scanners without OS drivers, enabled automatically on Linux and Windows
+- **Command-line interface** — `scanlib list`, `scanlib info`, and `scanlib scan` for quick scanning from the shell
 - **Output to PDF** — assemble scanned pages into a PDF and control page encoding (JPEG or PNG)
 - **Minimal dependencies** — no external image or PDF processing libraries; JPEG uses platform-native encoders, PNG uses stdlib `zlib`, PDF assembly uses only the standard library
 - **Multi-page scanning** — automatic document feeder support and flatbed multi-page with a simple callback
@@ -25,6 +27,24 @@ pip install scanlib
 Python 3.9+. Pre-built wheels available for all major platforms. On Linux, `libsane` and `libjpeg-turbo` are required at runtime (`apt install libsane-dev libturbojpeg0-dev`); on other platforms, no additional dependencies are required.
 
 ## Quick Start
+
+### Command line
+
+```bash
+# List available scanners
+scanlib list
+
+# Show scanner capabilities
+scanlib info -s 0
+
+# Scan to PDF
+scanlib scan -o document.pdf --dpi 300 --color-mode gray
+
+# Multi-page flatbed scan with interactive prompting
+scanlib scan -o multipage.pdf --pages ask
+```
+
+### Python API
 
 ```python
 import scanlib

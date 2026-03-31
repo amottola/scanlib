@@ -65,7 +65,7 @@ PNG encoding is handled in `build_pdf()` (`_types.py`) using stdlib `zlib` for d
 
 ### Backend selection and thread dispatch
 
-`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. On Linux and Windows, a `_CompositeBackend` wraps the platform backend together with the eSCL backend — `list_scanners()` runs both in parallel and deduplicates by IP address. On macOS, only `MacOSBackend` is used (ImageCaptureCore already handles eSCL natively). Each backend handles its own thread safety internally:
+`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. On Linux and Windows, a `_CompositeBackend` wraps the platform backend together with the eSCL backend — `list_scanners()` runs both in parallel and deduplicates by IP address. On macOS, only `MacOSBackend` is used by default (ImageCaptureCore already handles eSCL natively); setting `SCANLIB_ESCL=1` enables the composite backend on macOS too. Each backend handles its own thread safety internally:
 
 - **SANE**: used directly (synchronous ctypes, thread-safe)
 - **macOS**: `MacOSBackend` uses a lock and main-thread dispatch — from the main thread, calls run directly; from a background thread, calls are forwarded via `performSelectorOnMainThread:withObject:waitUntilDone:` (ImageCaptureCore delivers callbacks via the main dispatch queue). Background-thread usage assumes the main thread is running a run loop.

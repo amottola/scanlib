@@ -171,6 +171,28 @@ long-running discovery from another thread:
 When the event is set, ``list_scanners()`` returns immediately with
 whatever scanners have been found (or an empty list).
 
+eSCL / AirScan Network Scanners
+-------------------------------
+
+On Linux and Windows, scanlib automatically discovers network scanners
+that advertise via mDNS (``_uscan._tcp`` / ``_uscans._tcp``) and
+communicates with them directly over HTTP using the eSCL protocol.  No
+OS-level scanner drivers are required for network scanners — only USB
+scanners still need SANE or WIA.
+
+On macOS, ImageCaptureCore already handles eSCL natively, so the
+built-in eSCL backend is disabled by default.  To enable it (e.g. if
+ICC doesn't discover a scanner), set the environment variable:
+
+.. code-block:: bash
+
+   export SCANLIB_ESCL=1
+
+When enabled, eSCL discovery runs in parallel with the native backend
+and results are deduplicated by IP address.  Each scanner's ``backend``
+property indicates which backend discovered it (``"sane"``,
+``"imagecapture"``, ``"wia"``, or ``"escl"``).
+
 Thread Safety
 -------------
 

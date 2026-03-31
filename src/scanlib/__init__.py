@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from collections.abc import Iterator
@@ -170,7 +171,10 @@ def _get_backend() -> ScanBackend:
     elif sys.platform == "darwin":
         from .backends._macos import MacOSBackend
 
-        _backend = MacOSBackend()
+        if os.environ.get("SCANLIB_ESCL", "").strip() == "1":
+            _backend = _CompositeBackend(MacOSBackend())
+        else:
+            _backend = MacOSBackend()
 
     elif sys.platform == "win32":
         from .backends._wia import WiaBackend
