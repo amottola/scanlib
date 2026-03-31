@@ -130,9 +130,7 @@ class _EsclConnection:
                 self.ip, self.port, timeout=30, context=ctx
             )
         else:
-            self._conn = http.client.HTTPConnection(
-                self.ip, self.port, timeout=30
-            )
+            self._conn = http.client.HTTPConnection(self.ip, self.port, timeout=30)
         return self._conn
 
     def get_capabilities(self) -> ET.Element:
@@ -141,9 +139,7 @@ class _EsclConnection:
         resp = conn.getresponse()
         body = resp.read()
         if resp.status != 200:
-            raise ScanError(
-                f"ScannerCapabilities returned {resp.status}: {body[:200]}"
-            )
+            raise ScanError(f"ScannerCapabilities returned {resp.status}: {body[:200]}")
         return ET.fromstring(body)
 
     def get_status(self) -> str:
@@ -338,7 +334,11 @@ def _parse_capabilities(
     # Build defaults from the first source
     first = sources[0]
     default_dpi = 300 if 300 in first.resolutions else first.resolutions[0]
-    default_cm = ColorMode.COLOR if ColorMode.COLOR in first.color_modes else first.color_modes[0]
+    default_cm = (
+        ColorMode.COLOR
+        if ColorMode.COLOR in first.color_modes
+        else first.color_modes[0]
+    )
     defaults = ScannerDefaults(
         dpi=default_dpi,
         color_mode=default_cm,
@@ -411,9 +411,7 @@ def _build_scan_settings(
 # ---------------------------------------------------------------------------
 
 
-def _decode_scan_response(
-    data: bytes, color_mode: ColorMode
-) -> ScannedPage:
+def _decode_scan_response(data: bytes, color_mode: ColorMode) -> ScannedPage:
     """Decode scanner response (JPEG) into a ScannedPage."""
     raw_pixels, width, height, components = decode_jpeg(data)
 
@@ -588,6 +586,4 @@ class EsclBackend:
 
     def get_scanner_ips(self) -> dict[str, str]:
         """Return scanner_id → IP mapping for deduplication."""
-        return {
-            sid: conn.ip for sid, conn in self._connections.items()
-        }
+        return {sid: conn.ip for sid, conn in self._connections.items()}
