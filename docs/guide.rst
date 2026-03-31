@@ -211,15 +211,28 @@ whatever scanners have been found (or an empty list).
 eSCL / AirScan Network Scanners
 -------------------------------
 
-On Linux and Windows, scanlib automatically discovers network scanners
-that advertise via mDNS (``_uscan._tcp`` / ``_uscans._tcp``) and
-communicates with them directly over HTTP using the eSCL protocol.  No
-OS-level scanner drivers are required for network scanners — only USB
-scanners still need SANE or WIA.
+scanlib includes a built-in eSCL (AirScan) backend that discovers
+network scanners via mDNS and communicates with them directly over
+HTTP — no OS-level scanner drivers are needed.
 
-On macOS, ImageCaptureCore already handles eSCL natively, so the
-built-in eSCL backend is disabled by default.  To enable it (e.g. if
-ICC doesn't discover a scanner), set the environment variable:
+.. list-table::
+   :header-rows: 1
+   :widths: 15 20 65
+
+   * - Platform
+     - eSCL status
+     - Notes
+   * - **Linux**
+     - Always enabled
+     - Runs alongside SANE; SANE handles USB, eSCL handles network
+   * - **Windows**
+     - Always enabled
+     - Runs alongside WIA; WIA handles USB, eSCL handles network
+   * - **macOS**
+     - Opt-in (``SCANLIB_ESCL=1``)
+     - ImageCaptureCore already handles eSCL natively
+
+To enable the eSCL backend on macOS:
 
 .. code-block:: bash
 
@@ -227,8 +240,27 @@ ICC doesn't discover a scanner), set the environment variable:
 
 When enabled, eSCL discovery runs in parallel with the native backend
 and results are deduplicated by IP address.  Each scanner's ``backend``
-property indicates which backend discovered it (``"sane"``,
-``"imagecapture"``, ``"wia"``, or ``"escl"``).
+property indicates which backend discovered it:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 40 35
+
+   * - ``scanner.backend``
+     - Description
+     - Scanner ID format
+   * - ``"sane"``
+     - Linux SANE (USB)
+     - SANE device URI
+   * - ``"imagecapture"``
+     - macOS ImageCaptureCore
+     - ICC UUID
+   * - ``"wia"``
+     - Windows WIA 2.0 (USB)
+     - WIA device ID
+   * - ``"escl"``
+     - eSCL / AirScan (network)
+     - ``escl:IP:PORT``
 
 Thread Safety
 -------------

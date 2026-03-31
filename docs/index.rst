@@ -29,28 +29,56 @@ Requirements & Installation
 major platforms. When installing from source, a C compiler is needed to
 build the bundled accelerator extension.
 
-Platform backends and their Python bindings are installed automatically by pip:
+Backends
+^^^^^^^^
 
-- **macOS 10.7+** — ImageCaptureCore via pyobjc. JPEG encoding uses the
-  built-in ImageIO framework. No additional system packages required.
-- **Windows 10+** — WIA 2.0 via `comtypes <https://github.com/enthought/comtypes>`_.
-  JPEG encoding uses the built-in WIC (Windows Imaging Component).
-  No additional system packages required.
-- **Linux** — `SANE <http://www.sane-project.org/>`_ via ctypes. JPEG
-  encoding is compiled into the bundled C extension (linked against
-  libjpeg at build time). Pre-built wheels include the JPEG encoder;
-  building from source requires ``libjpeg-dev`` headers. SANE must be
-  installed:
+.. list-table::
+   :header-rows: 1
+   :widths: 12 18 18 15 37
 
-  .. code-block:: bash
+   * - Platform
+     - Backend
+     - Scanner types
+     - JPEG codec
+     - System packages
+   * - **macOS 10.7+**
+     - ImageCaptureCore (pyobjc)
+     - USB + network
+     - ImageIO
+     - None
+   * - **Windows 10+**
+     - WIA 2.0 (`comtypes <https://github.com/enthought/comtypes>`_)
+     - USB only
+     - WIC
+     - None
+   * - **Linux**
+     - SANE (ctypes)
+     - USB only
+     - libjpeg (C ext)
+     - ``libsane-dev libjpeg-dev``
+   * - **All platforms**
+     - eSCL / AirScan (HTTP)
+     - Network only
+     - per-platform
+     - None
 
-     # Debian / Ubuntu
-     apt install libsane-dev libjpeg-dev
+Platform backends and their dependencies are installed automatically by
+pip.  The eSCL backend is enabled automatically on Linux and Windows
+(where it complements the platform backend for network scanners).
+On macOS it is opt-in via ``SCANLIB_ESCL=1`` since ImageCaptureCore
+already handles network scanners natively.
 
-     # Fedora / RHEL
-     dnf install sane-backends libjpeg-turbo-devel
+On Linux, SANE must be installed at the system level:
 
-Page encoding supports JPEG and lossless PNG (this last one uses stdlib ``zlib``,
+.. code-block:: bash
+
+   # Debian / Ubuntu
+   apt install libsane-dev libjpeg-dev
+
+   # Fedora / RHEL
+   dnf install sane-backends libjpeg-turbo-devel
+
+Page encoding supports JPEG and lossless PNG (PNG uses stdlib ``zlib``,
 no external dependency).
 
 .. toctree::

@@ -18,13 +18,33 @@ A multiplatform document scanning library for Python with platform-native scanni
 - **Thread-safe** — call from any thread; backend threading is handled internally
 - **Progress & cancellation** — monitor scan progress and abort mid-scan via callback
 
+## Backends
+
+| Platform | Backend | Scanner types | eSCL | System packages |
+|---|---|---|---|---|
+| **macOS 10.7+** | ImageCaptureCore | USB + network | Opt-in (`SCANLIB_ESCL=1`) | None |
+| **Windows 10+** | WIA 2.0 | USB | Always enabled | None |
+| **Linux** | SANE | USB | Always enabled | `libsane-dev libjpeg-dev` |
+
+The eSCL (AirScan) backend discovers and drives network scanners directly over HTTP — no OS-level scanner drivers needed. On Linux and Windows it runs alongside the platform backend automatically. On macOS, ImageCaptureCore already handles network scanners natively; set `SCANLIB_ESCL=1` to use the eSCL backend instead.
+
 ## Installation
 
 ```bash
 pip install scanlib
 ```
 
-Python 3.9+. Pre-built wheels available for all major platforms. On Linux, `libsane` and `libjpeg-turbo` are required at runtime (`apt install libsane-dev libturbojpeg0-dev`); on other platforms, no additional dependencies are required.
+Python 3.9+. Pre-built wheels available for all major platforms. On Linux, SANE and libjpeg must be installed at the system level:
+
+```bash
+# Debian / Ubuntu
+apt install libsane-dev libjpeg-dev
+
+# Fedora / RHEL
+dnf install sane-backends libjpeg-turbo-devel
+```
+
+On macOS and Windows, no additional system packages are required.
 
 ## Quick Start
 
