@@ -2,9 +2,9 @@
 
 Usage::
 
-    python3 -m scanlib list          # list available scanners
-    python3 -m scanlib info -s 0     # show scanner capabilities
-    python3 -m scanlib scan -o out.pdf --dpi 300 --color-mode gray
+    scanlib list                     # list available scanners
+    scanlib info -s 0                # show scanner capabilities
+    scanlib scan -o out.pdf --dpi 300 --color-mode gray
 """
 
 from __future__ import annotations
@@ -85,13 +85,15 @@ def cmd_list(args: argparse.Namespace) -> None:
     # Compute column widths
     rows = []
     for i, s in enumerate(scanners):
-        rows.append((
-            str(i),
-            str(s),
-            s.id,
-            s.location or "-",
-            s.backend,
-        ))
+        rows.append(
+            (
+                str(i),
+                str(s),
+                s.id,
+                s.location or "-",
+                s.backend,
+            )
+        )
 
     headers = ("#", "Name", "ID", "Location", "Backend")
     widths = [len(h) for h in headers]
@@ -185,7 +187,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if args.scan_area:
             parts = args.scan_area.split(",")
             if len(parts) != 4:
-                _err("--scan-area must be x,y,width,height (4 comma-separated integers)")
+                _err(
+                    "--scan-area must be x,y,width,height "
+                    "(4 comma-separated integers)"
+                )
                 sys.exit(1)
             try:
                 scan_area = ScanArea(*(int(p.strip()) for p in parts))
@@ -201,17 +206,18 @@ def cmd_scan(args: argparse.Namespace) -> None:
         next_page = None
         if args.pages and source != ScanSource.FEEDER:
             if args.pages.lower() == "ask":
+
                 def next_page(count: int) -> bool:
                     try:
                         sys.stderr.write(
-                            f"Scanned {count} page(s). "
-                            f"Scan another page? [y/N] "
+                            f"Scanned {count} page(s). " f"Scan another page? [y/N] "
                         )
                         sys.stderr.flush()
                         answer = input().strip().lower()
                         return answer in ("y", "yes")
                     except (EOFError, KeyboardInterrupt):
                         return False
+
             else:
                 try:
                     max_pages = int(args.pages)
@@ -263,9 +269,7 @@ def main() -> None:
         prog="scanlib",
         description="Scan documents from the command line.",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"scanlib {__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"scanlib {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
     # --- list ---
@@ -274,46 +278,64 @@ def main() -> None:
     # --- info ---
     p_info = subparsers.add_parser("info", help="Show scanner capabilities")
     p_info.add_argument(
-        "-s", "--scanner", default="0",
+        "-s",
+        "--scanner",
+        default="0",
         help="Scanner index or ID (default: 0)",
     )
 
     # --- scan ---
     p_scan = subparsers.add_parser("scan", help="Scan a document to PDF")
     p_scan.add_argument(
-        "-s", "--scanner", default="0",
+        "-s",
+        "--scanner",
+        default="0",
         help="Scanner index or ID (default: 0)",
     )
     p_scan.add_argument(
-        "-o", "--output", default="scan.pdf",
+        "-o",
+        "--output",
+        default="scan.pdf",
         help="Output PDF file path (default: scan.pdf)",
     )
     p_scan.add_argument(
-        "--dpi", type=int, default=None,
+        "--dpi",
+        type=int,
+        default=None,
         help="Scan resolution in DPI (default: scanner default)",
     )
     p_scan.add_argument(
-        "--color-mode", choices=["color", "gray", "bw"], default=None,
+        "--color-mode",
+        choices=["color", "gray", "bw"],
+        default=None,
         help="Color mode (default: scanner default)",
     )
     p_scan.add_argument(
-        "--source", choices=["flatbed", "feeder"], default=None,
+        "--source",
+        choices=["flatbed", "feeder"],
+        default=None,
         help="Scan source (default: scanner default)",
     )
     p_scan.add_argument(
-        "--scan-area", default=None,
+        "--scan-area",
+        default=None,
         help="Scan area as x,y,width,height in 1/10 mm",
     )
     p_scan.add_argument(
-        "--format", choices=["jpeg", "png"], default=None,
+        "--format",
+        choices=["jpeg", "png"],
+        default=None,
         help="Image format inside PDF (default: auto)",
     )
     p_scan.add_argument(
-        "--jpeg-quality", type=int, default=85,
+        "--jpeg-quality",
+        type=int,
+        default=85,
         help="JPEG quality 1-100 (default: 85)",
     )
     p_scan.add_argument(
-        "--pages", default=None,
+        "--pages",
+        default=None,
         help="Number of pages or 'ask' for interactive prompting",
     )
 
