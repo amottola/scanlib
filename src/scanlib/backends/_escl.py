@@ -34,6 +34,7 @@ from .._types import (
     ScanAborted,
     ScanArea,
     ScanError,
+    ScannerBusyError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -210,8 +211,9 @@ class _EsclConnection:
                     if resp.status == 409
                     else "unavailable (HTTP 503)"
                 )
-                raise ScanError(
-                    f"Scanner {reason} — " f"still not ready after {retries} attempts"
+                raise ScannerBusyError(
+                    f"Scanner {reason} — in use by another session or "
+                    f"application; still not ready after {retries} attempts."
                 )
             if resp.status not in (200, 201):
                 raise ScanError(f"ScanJobs POST returned {resp.status}")

@@ -8,6 +8,7 @@ from scanlib._types import (
     ScanError,
     ScanLibError,
     Scanner,
+    ScannerBusyError,
     ScannerDefaults,
     ScannerNotOpenError,
     ScanOptions,
@@ -124,6 +125,18 @@ class TestScanner:
         s = Scanner(name="test", vendor=None, model=None, backend="sane")
         with pytest.raises(ScannerNotOpenError):
             _ = s.sources
+
+
+class TestScannerBusyError:
+    def test_is_scan_error_subclass(self):
+        # Subclass of ScanError so existing `except ScanError` handlers
+        # (and the public hierarchy) keep catching the busy condition.
+        assert issubclass(ScannerBusyError, ScanError)
+        assert issubclass(ScannerBusyError, ScanLibError)
+
+    def test_caught_as_scan_error(self):
+        with pytest.raises(ScanError):
+            raise ScannerBusyError("busy")
 
     def test_scan_raises_when_not_open(self):
         s = Scanner(name="test", vendor=None, model=None, backend="sane")

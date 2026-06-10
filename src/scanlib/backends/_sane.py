@@ -20,6 +20,7 @@ from .._types import (
     ScanArea,
     ScanAborted,
     ScanError,
+    ScannerBusyError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -224,6 +225,8 @@ def _check_status(status: int, context: str = "") -> None:
         msg = f"SANE error: {name}"
         if context:
             msg = f"{context}: {msg}"
+        if status == _STATUS_DEVICE_BUSY:
+            raise ScannerBusyError()
         raise ScanError(msg)
 
 
@@ -718,6 +721,8 @@ def _read_defaults(sources: list[SourceInfo]) -> ScannerDefaults | None:
 def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
     status = dev.start()
     if status != _STATUS_GOOD:
+        if status == _STATUS_DEVICE_BUSY:
+            raise ScannerBusyError()
         name = _STATUS_NAMES.get(status, f"unknown ({status})")
         raise ScanError(f"sane_start: {name}")
 

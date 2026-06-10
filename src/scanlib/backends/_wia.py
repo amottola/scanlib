@@ -64,6 +64,7 @@ from .._types import (
     ScanArea,
     ScanAborted,
     ScanError,
+    ScannerBusyError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -113,6 +114,10 @@ _FEEDER = 2
 _WIA_FORMAT_BMP = GUID("{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}")
 
 _WIA_ERROR_PAPER_EMPTY = -2145320957  # 0x80210003
+# HRESULTs that mean the device is in use / unavailable to this session.
+_WIA_ERROR_BUSY = -2145320954  # 0x80210006
+_WIA_ERROR_DEVICE_LOCKED = -2145320947  # 0x8021000D
+_WIA_BUSY_ERRORS = frozenset({_WIA_ERROR_BUSY, _WIA_ERROR_DEVICE_LOCKED})
 
 # Property attribute flags (from WiaDef.h)
 _WIA_PROP_RANGE = 0x10
@@ -999,6 +1004,8 @@ class WiaBackend:
             dm = self._create_device_manager()
             root_item = dm.CreateDevice(0, scanner.id)
         except Exception as exc:
+            if getattr(exc, "hresult", None) in _WIA_BUSY_ERRORS:
+                raise ScannerBusyError() from exc
             raise ScanError(f"Failed to open scanner {scanner.id!r}: {exc}") from exc
 
         # Read device-level properties from root item
@@ -1159,6 +1166,8 @@ class WiaBackend:
                         if is_feeder and not all_pages and not callback.pages:
                             raise FeederEmptyError("No documents in feeder") from exc
                         # Feeder empty after some pages — that's normal
+                    elif hr in _WIA_BUSY_ERRORS:
+                        raise ScannerBusyError() from exc
                     elif "cancel" in msg_text or "abort" in msg_text:
                         raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
                     elif not callback.pages and not all_pages:

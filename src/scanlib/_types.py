@@ -35,6 +35,18 @@ class FeederEmptyError(ScanError):
     """The document feeder has no pages to scan."""
 
 
+class ScannerBusyError(ScanError):
+    """The scanner is in use by another session or application."""
+
+    _DEFAULT = (
+        "Scanner is in use by another session or application. "
+        "Close it and try again."
+    )
+
+    def __init__(self, message: str = _DEFAULT) -> None:
+        super().__init__(message)
+
+
 class ScannerNotOpenError(ScanLibError):
     """Operation requires an open scanner session."""
 

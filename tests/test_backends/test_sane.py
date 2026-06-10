@@ -9,6 +9,7 @@ from scanlib._types import (
     ScanAborted,
     ScanError,
     Scanner,
+    ScannerBusyError,
     ScanOptions,
     ScanSource,
     SourceInfo,
@@ -83,6 +84,21 @@ def _open_scanner(backend, mock_sane, mock_dev, name="s:1"):
     scanner = scanners[0]
     backend.open_scanner(scanner)
     return scanner
+
+
+class TestCheckStatus:
+    def test_device_busy_raises_scanner_busy(self):
+        from scanlib.backends._sane import _STATUS_DEVICE_BUSY, _check_status
+
+        with pytest.raises(ScannerBusyError):
+            _check_status(_STATUS_DEVICE_BUSY, "sane_open")
+
+    def test_other_error_raises_scan_error(self):
+        from scanlib.backends._sane import _STATUS_IO_ERROR, _check_status
+
+        with pytest.raises(ScanError) as exc_info:
+            _check_status(_STATUS_IO_ERROR, "sane_read")
+        assert not isinstance(exc_info.value, ScannerBusyError)
 
 
 class TestSaneBackend:

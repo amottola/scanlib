@@ -23,6 +23,7 @@ from .._types import (
     ScanArea,
     ScanAborted,
     ScanError,
+    ScannerBusyError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -49,6 +50,28 @@ _COLOR_MODE_TO_PIXEL_DATA_TYPE = {
 
 # ICScannerTransferMode
 _TRANSFER_MODE_MEMORY_BASED = 1
+
+# NSError codes (in the com.apple.imagecapture domain) that mean the device is
+# already in use by another session/application and cannot be opened.  -47 is
+# the classic macOS ``fBsyErr`` (resource busy), which is what real network
+# scanners (e.g. Brother) return when another app holds the session; the
+# -9924/-9925 ICReturn codes are the documented in-use values.
+_BUSY_ERROR_CODES = frozenset({-47, -9924, -9925})
+
+
+def _normalize_error_code(code: int | None) -> int | None:
+    """Normalize an NSError code to a signed 32-bit value.
+
+    ImageCaptureCore packs its status into a 32-bit value, but pyobjc may
+    surface it as an unsigned NSInteger (e.g. 4294967249 instead of -47).
+    Wrap large positive values back into the signed range so they can be
+    matched against the documented negative status codes.
+    """
+    if code is None:
+        return None
+    if code > 0x7FFFFFFF:
+        code -= 0x100000000
+    return code
 
 
 def _measurement_factor(unit: int) -> float | None:
@@ -113,6 +136,7 @@ class _ScanDelegate(NSObject):
         self._progress = None
         self._last_pct = 0
         self.error = None
+        self.error_code = None
         self.session_open = False
         self._aborted = False
         # Threading events for cross-thread signaling
@@ -137,6 +161,10 @@ class _ScanDelegate(NSObject):
     def device_didOpenSessionWithError_(self, device, error):
         if error:
             self.error = str(error)
+            try:
+                self.error_code = _normalize_error_code(int(error.code()))
+            except Exception:
+                self.error_code = None
         else:
             self.session_open = True
         self._open_event.set()
@@ -589,6 +617,7 @@ class MacOSBackend:
         # Retry opening the session.  Network scanners may refuse if the
         # previous session close hasn't fully propagated yet.
         last_error = None
+        last_error_code = None
         scan_delegate = None
         for _attempt in range(3):
 
@@ -606,9 +635,20 @@ class MacOSBackend:
                     break
 
             last_error = scan_delegate.error
+            last_error_code = scan_delegate.error_code
+            # A busy device won't free up within the retry window, and the
+            # other holder is unlikely to release in seconds — fail fast.
+            if last_error_code in _BUSY_ERROR_CODES:
+                break
             time.sleep(2.0)
 
         if last_error:
+            if last_error_code in _BUSY_ERROR_CODES:
+                raise ScannerBusyError(
+                    f"Scanner {scanner.name!r} is in use by another application "
+                    "or host (e.g. Image Capture, Preview, or a vendor tool). "
+                    "Close it and try again."
+                )
             raise ScanError(f"Failed to open device session: {last_error}")
 
         if scan_delegate is None or not scan_delegate.session_open:

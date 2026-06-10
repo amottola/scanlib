@@ -4,14 +4,65 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from scanlib._types import ColorMode, ScanArea, ScanOptions, ScanSource, SourceInfo
+from scanlib._types import (
+    ColorMode,
+    ScanArea,
+    ScannerBusyError,
+    ScanOptions,
+    ScanSource,
+    SourceInfo,
+)
 from scanlib.backends._escl import (
     _build_scan_settings,
     _decode_scan_response,
     _escl_to_tenths_mm,
+    _EsclConnection,
     _parse_capabilities,
     _tenths_mm_to_escl,
 )
+
+# ---------------------------------------------------------------------------
+# create_job busy handling
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status):
+        self.status = status
+
+    def read(self):
+        return b""
+
+    def getheader(self, name):
+        return None
+
+
+class _FakeConn:
+    """Minimal stand-in for http.client.HTTPConnection."""
+
+    def __init__(self, status):
+        self._status = status
+        self.requests = 0
+
+    def request(self, *args, **kwargs):
+        self.requests += 1
+
+    def getresponse(self):
+        return _FakeResponse(self._status)
+
+
+class TestCreateJobBusy:
+    @pytest.mark.parametrize("status", [409, 503])
+    def test_persistent_busy_raises_scanner_busy(self, status, monkeypatch):
+        conn = _EsclConnection("1.2.3.4", 80, tls=False, resource_path="eSCL")
+        fake = _FakeConn(status)
+        monkeypatch.setattr(conn, "_connect", lambda: fake)
+        # 409 triggers cancel_active_jobs between attempts — stub it out.
+        monkeypatch.setattr(conn, "cancel_active_jobs", lambda: None)
+
+        with pytest.raises(ScannerBusyError):
+            conn.create_job("<xml/>", retries=2, delay=0)
+
 
 # ---------------------------------------------------------------------------
 # Unit conversion

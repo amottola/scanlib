@@ -65,6 +65,8 @@ Exceptions
 
 .. autoclass:: scanlib.FeederEmptyError
 
+.. autoclass:: scanlib.ScannerBusyError
+
 .. autoclass:: scanlib.ScannerNotOpenError
 
 .. autoclass:: scanlib.NoScannerFoundError
