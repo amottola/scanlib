@@ -523,7 +523,11 @@ class Scanner:
             for page in self._backend_impl.scan_pages(self, options):
                 if self._abort_event.is_set():
                     raise ScanAborted("Scan aborted")
-                yield page
+                # Normalise to the requested color mode: scanners may
+                # return a richer mode than asked for (e.g. RGB when
+                # grayscale was requested), so down-convert here once for
+                # every backend rather than relying on each one.
+                yield _coerce_color_mode(page, options.color_mode, options.bw_threshold)
                 page_count += 1
             # Feeder: backend loops internally until empty; one call is enough.
             # Flatbed: backend scans one round; ask next_page to continue.
@@ -688,6 +692,39 @@ def wait_or_cancel(
         done.wait(wait)
         elapsed += wait
     return True
+
+
+# Color-mode "richness" ordering: COLOR carries the most information,
+# BW the least.  We can down-convert (drop information) but never
+# up-convert (fabricate channels we were not given).
+_COLOR_MODE_RANK = {ColorMode.BW: 0, ColorMode.GRAY: 1, ColorMode.COLOR: 2}
+
+
+def _coerce_color_mode(
+    page: ScannedPage, target: ColorMode, bw_threshold: int = 128
+) -> ScannedPage:
+    """Down-convert *page* to the *target* color mode if it is richer.
+
+    Scanners do not always honour the requested color mode — some eSCL
+    devices return RGB even when grayscale is requested, for example.
+    This normalises a page to the mode the caller asked for: COLOR→GRAY
+    via luminance, GRAY/COLOR→BW via threshold.  Pages already at (or
+    below) the target richness are returned unchanged.
+    """
+    if _COLOR_MODE_RANK[page.color_mode] <= _COLOR_MODE_RANK[target]:
+        return page
+
+    from _scanlib_accel import gray_to_bw, rgb_to_gray
+
+    data = page.data
+    mode = page.color_mode
+    if mode == ColorMode.COLOR:
+        data = rgb_to_gray(data, page.width, page.height)
+        mode = ColorMode.GRAY
+    if target == ColorMode.BW and mode == ColorMode.GRAY:
+        data = gray_to_bw(data, page.width, page.height, bw_threshold)
+        mode = ColorMode.BW
+    return ScannedPage(data=data, width=page.width, height=page.height, color_mode=mode)
 
 
 def build_pdf(

@@ -599,13 +599,15 @@ def _decode_pdf_jpeg(data: bytes) -> tuple[bytes, int, int, int]:
 
 def _decode_scan_response(
     data: bytes,
-    color_mode: ColorMode,
     content_type: str = "image/jpeg",
-    bw_threshold: int = 128,
 ) -> ScannedPage:
-    """Decode scanner response into a ScannedPage.
+    """Decode a scanner response into a ScannedPage in its native mode.
 
     Handles JPEG, PNG, and PDF (extracts first image from PDF) responses.
+    The page is returned in whatever mode the scanner actually sent
+    (grayscale or color); coercion to the requested color mode — which
+    some scanners ignore — is handled centrally in ``Scanner.scan_pages``
+    so the conversion happens at most once and only when needed.
     """
     ct = content_type.split(";")[0].strip().lower()
 
@@ -617,19 +619,7 @@ def _decode_scan_response(
         # Default: treat as JPEG (covers image/jpeg and unknown types)
         raw_pixels, width, height, components = decode_jpeg(data)
 
-    if components == 1:
-        actual_mode = ColorMode.GRAY
-    else:
-        actual_mode = ColorMode.COLOR
-
-    # If BW was requested, convert grayscale to 1-bit
-    if color_mode == ColorMode.BW and actual_mode != ColorMode.BW:
-        from _scanlib_accel import gray_to_bw, rgb_to_gray
-
-        if actual_mode == ColorMode.COLOR:
-            raw_pixels = rgb_to_gray(raw_pixels, width, height)
-        raw_pixels = gray_to_bw(raw_pixels, width, height, bw_threshold)
-        actual_mode = ColorMode.BW
+    actual_mode = ColorMode.GRAY if components == 1 else ColorMode.COLOR
 
     return ScannedPage(
         data=raw_pixels,
@@ -812,12 +802,7 @@ class EsclBackend:
                 doc_data, content_type = result
                 page_num += 1
                 try:
-                    page = _decode_scan_response(
-                        doc_data,
-                        options.color_mode,
-                        content_type,
-                        options.bw_threshold,
-                    )
+                    page = _decode_scan_response(doc_data, content_type)
                 except Exception as exc:
                     raise ScanError(f"Failed to decode scan data: {exc}") from exc
 

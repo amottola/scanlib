@@ -16,6 +16,7 @@ from scanlib._types import (
     ScannedDocument,
     ScannedPage,
     SourceInfo,
+    _coerce_color_mode,
     build_pdf,
     normalize_resolutions,
 )
@@ -409,6 +410,40 @@ def _make_page(width=16, height=16, color_mode=ColorMode.COLOR):
     )
 
 
+class TestCoerceColorMode:
+    def test_color_to_gray(self):
+        page = _make_page(width=8, height=8, color_mode=ColorMode.COLOR)
+        out = _coerce_color_mode(page, ColorMode.GRAY)
+        assert out.color_mode == ColorMode.GRAY
+        assert len(out.data) == out.width * out.height  # 1 byte/pixel
+
+    def test_color_to_bw(self):
+        page = _make_page(width=8, height=8, color_mode=ColorMode.COLOR)
+        out = _coerce_color_mode(page, ColorMode.BW)
+        assert out.color_mode == ColorMode.BW
+        assert len(out.data) == ((out.width + 7) // 8) * out.height
+
+    def test_gray_to_bw(self):
+        page = _make_page(width=8, height=8, color_mode=ColorMode.GRAY)
+        out = _coerce_color_mode(page, ColorMode.BW)
+        assert out.color_mode == ColorMode.BW
+
+    def test_matching_mode_returns_same_object(self):
+        # No conversion (and no copy) when the page already matches.
+        page = _make_page(color_mode=ColorMode.GRAY)
+        assert _coerce_color_mode(page, ColorMode.GRAY) is page
+
+    def test_does_not_upconvert(self):
+        # Requested COLOR but page is GRAY: we cannot fabricate channels,
+        # so the page is returned unchanged (same object, no copy).
+        page = _make_page(color_mode=ColorMode.GRAY)
+        assert _coerce_color_mode(page, ColorMode.COLOR) is page
+
+    def test_bw_matching_returns_same_object(self):
+        page = _make_page(color_mode=ColorMode.BW)
+        assert _coerce_color_mode(page, ColorMode.BW) is page
+
+
 class TestScannedPage:
     def test_color_mode_rgb(self):
         page = _make_page(color_mode=ColorMode.COLOR)
@@ -617,6 +652,16 @@ class TestScanPages:
         )
         s.open()
         return s
+
+    def test_scan_pages_coerces_to_requested_mode(self):
+        # The mock backend yields a COLOR page; requesting GRAY must
+        # down-convert at the scan_pages level (some scanners ignore the
+        # requested mode and return a richer one).
+        s = self._open_scanner(color_modes=[ColorMode.COLOR, ColorMode.GRAY])
+        pages = list(s.scan_pages(color_mode=ColorMode.GRAY))
+        assert pages
+        assert all(p.color_mode == ColorMode.GRAY for p in pages)
+        assert len(pages[0].data) == pages[0].width * pages[0].height
 
     def test_scan_pages_yields_pages(self):
         pages = [_make_page(), _make_page()]
