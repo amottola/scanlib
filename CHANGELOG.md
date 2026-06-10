@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.3.0 (unreleased)
+
+### New features
+
+- **`ScannerBusyError`** — raised when a scanner is already in use by
+  another session or application (most scanners, network ones especially,
+  allow only one scan session at a time).  Subclass of `ScanError`, so
+  existing `except ScanError` handlers keep working.  Mapped from each
+  backend's native busy signal: ImageCaptureCore `-47`/in-use codes
+  (macOS), `SANE_STATUS_DEVICE_BUSY`, eSCL HTTP 409/503, and WIA
+  `WIA_ERROR_BUSY`/`WIA_ERROR_DEVICE_LOCKED`.
+
+### Improvements
+
+- **The requested color mode is always honoured.**  Some scanners
+  (notably over eSCL) return a richer mode than requested — e.g. RGB when
+  grayscale was asked for.  `scan()` and `scan_pages()` now down-convert
+  such pages to the requested mode consistently across all backends
+  (COLOR → GRAY via luminance, GRAY/COLOR → BW via threshold).  The
+  conversion runs only when the scanner actually returns a richer mode,
+  so there is no extra cost in the common case.
+- **eSCL discovery is far more reliable.**  The mDNS query is now
+  retransmitted with growing intervals until a scanner resolves or the
+  timeout elapses — multicast is lossy (especially over Wi-Fi) and a
+  single query/response can be dropped or suppressed as a duplicate — and
+  address records carried under the SRV target hostname are linked to the
+  service instance across packets.
+- **eSCL on macOS (`SCANLIB_ESCL=1`) now works under the composite
+  backend.**  The composite pumps the ImageCaptureCore run loop while
+  waiting for discovery (it was previously starved and returned nothing),
+  and a scanner found by both ImageCaptureCore and eSCL is deduplicated by
+  device UUID so it appears once (preferring the eSCL driver).
+- **SANE discovery no longer probes the network.**  It now passes
+  `local_only`, so SANE's network backends are not asked to enumerate
+  network scanners (which the eSCL backend handles).  This also silences
+  the HTTP 404 messages those backends printed to stdout/stderr during
+  discovery.
+
+### Bug fixes
+
+- eSCL discovery no longer reports unusable, duplicate entries for
+  scanners that advertise a link-local (`fe80::…`) address — link-local
+  addresses are not connectable without a zone scope, so they are skipped
+  and IPv4 is preferred.
+
 ## 1.2.0
 
 ### New features
