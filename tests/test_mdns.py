@@ -1,8 +1,10 @@
 from scanlib._mdns import (
     LocationMap,
     _BrowseResult,
+    _best_address,
     _build_query,
     _encode_name,
+    _is_routable_address,
     _parse_responses,
     _parse_txt,
     _read_name,
@@ -230,3 +232,60 @@ class TestSrvAddressResolution:
         assert _resolvable_instances(result) == []
         result.addrs["A._uscan._tcp.local."] = ["1.2.3.4"]
         assert _resolvable_instances(result) == ["A._uscan._tcp.local."]
+
+
+class TestRoutableAddress:
+    def test_ipv4_routable(self):
+        assert _is_routable_address("192.168.1.23") is True
+
+    def test_ipv4_link_local(self):
+        assert _is_routable_address("169.254.1.2") is False
+
+    def test_ipv6_link_local(self):
+        assert _is_routable_address("fe80::3:4e83:3a7b:1fd3") is False
+
+    def test_ipv6_global(self):
+        assert _is_routable_address("2001:db8::1") is True
+
+
+class TestBestAddress:
+    def test_prefers_ipv4_over_ipv6(self):
+        assert _best_address(["fe80::1", "2001:db8::1", "192.168.1.5"]) == "192.168.1.5"
+
+    def test_link_local_only_returns_none(self):
+        assert _best_address(["fe80::3:4e83:3a7b:1fd3"]) is None
+
+    def test_global_ipv6_when_no_ipv4(self):
+        assert _best_address(["2001:db8::1"]) == "2001:db8::1"
+
+    def test_empty(self):
+        assert _best_address([]) is None
+
+
+class TestDiscoverSkipsLinkLocal:
+    def test_link_local_only_instance_skipped(self, monkeypatch):
+        from scanlib import _mdns
+
+        res = _BrowseResult()
+        good = "Brother MFC-L3750CDW series._uscan._tcp.local."
+        # A phantom service that resolves only to a link-local address.
+        bad = "20AB4F1B-0E9A-4567-B812-AADD01DFB6B5._uscans._tcp.local."
+        res.ptrs.add(("_uscan._tcp.local.", good))
+        res.ptrs.add(("_uscans._tcp.local.", bad))
+        res.addrs[good] = ["192.168.1.23", "fe80::b622:ff:fea1:72d1"]
+        res.addrs[bad] = ["fe80::3:4e83:3a7b:1fd3"]
+        res.srvs[good] = _SrvInfo(target="BRN.local.", port=80)
+        res.srvs[bad] = _SrvInfo(target="phantom.local.", port=53168)
+        res.txts[good] = {
+            "ty": "Brother MFC-L3750CDW series",
+            "UUID": "e3248000",
+            "rs": "eSCL",
+        }
+        res.txts[bad] = {}
+
+        monkeypatch.setattr(_mdns, "_browse_mdns", lambda timeout=4.0: res)
+        svcs = _mdns.discover_escl_services(timeout=1)
+
+        assert len(svcs) == 1
+        assert svcs[0].ip == "192.168.1.23"  # IPv4 chosen; link-local-only skipped
+        assert svcs[0].name == "Brother MFC-L3750CDW series"

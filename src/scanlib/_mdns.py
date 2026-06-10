@@ -264,9 +264,42 @@ def _resolve_srv_addresses(result: _BrowseResult) -> None:
             result.addrs[sname] = list(result.addrs[srv.target])
 
 
+def _is_routable_address(addr: str) -> bool:
+    """False for addresses that cannot be used as a connection target.
+
+    Skips IPv6 link-local (``fe80::/10``), which require a ``%zone`` scope
+    id we do not track and so are not connectable, and IPv4 link-local
+    (``169.254.0.0/16``).  Some scanners advertise an extra service that
+    only resolves to a link-local address; surfacing it produces an
+    unusable, duplicate scanner entry.
+    """
+    a = addr.lower()
+    if a.startswith("169.254."):
+        return False
+    # IPv6 link-local fe80::/10 spans the fe80–febf prefixes.
+    if ":" in a and a[:3] in ("fe8", "fe9", "fea", "feb"):
+        return False
+    return True
+
+
+def _best_address(addrs: list[str]) -> str | None:
+    """Pick the best connectable address, or ``None`` if there is none.
+
+    Prefers IPv4 (simpler and unambiguous in an ``escl:IP:PORT`` id) and
+    skips link-local addresses.
+    """
+    routable = [a for a in addrs if _is_routable_address(a)]
+    ipv4 = [a for a in routable if ":" not in a]
+    if ipv4:
+        return ipv4[0]
+    return routable[0] if routable else None
+
+
 def _resolvable_instances(result: _BrowseResult) -> list[str]:
-    """Return PTR service-instance names that resolve to at least one IP."""
-    return [inst for _svc, inst in result.ptrs if result.addrs.get(inst)]
+    """Return PTR instance names that resolve to a usable (routable) IP."""
+    return [
+        inst for _svc, inst in result.ptrs if _best_address(result.addrs.get(inst, []))
+    ]
 
 
 def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
@@ -457,8 +490,12 @@ def discover_escl_services(timeout: float = 4.0) -> list[EsclServiceInfo]:
     for svc_type, instance_name in browse.ptrs:
         txt = browse.txts.get(instance_name, {})
         srv = browse.srvs.get(instance_name)
-        ips = browse.addrs.get(instance_name, [])
-        if not ips:
+        # Pick a usable address: prefer IPv4 and skip link-local addresses.
+        # A service that resolves only to a link-local address is not
+        # connectable (no %zone scope) and would otherwise show up as a
+        # broken, duplicate scanner entry.
+        ip = _best_address(browse.addrs.get(instance_name, []))
+        if ip is None:
             continue
 
         tls = "_uscans._tcp" in svc_type
@@ -474,7 +511,6 @@ def discover_escl_services(timeout: float = 4.0) -> list[EsclServiceInfo]:
                 continue
             seen_uuids.add(uuid)
 
-        ip = ips[0]
         if not uuid and ip in seen_ips:
             continue
         seen_ips.add(ip)
