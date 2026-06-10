@@ -65,6 +65,22 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _await_thread(thread: threading.Thread, timeout: float) -> None:
+    """Wait up to *timeout* seconds for *thread* to finish.
+
+    On macOS this delegates to the backend's run-loop-aware wait so the
+    ImageCaptureCore platform backend — whose discovery callbacks arrive
+    on the main thread's run loop — isn't starved.  Everywhere else a
+    plain blocking join is correct.
+    """
+    if sys.platform == "darwin":
+        from .backends._macos import await_thread
+
+        await_thread(thread, timeout)
+    else:
+        thread.join(timeout)
+
+
 class _CompositeBackend:
     """Merges results from a platform backend and the eSCL backend.
 
@@ -107,12 +123,14 @@ class _CompositeBackend:
         t_platform.start()
         t_escl.start()
 
-        # Wait for eSCL first (fast, ~4s max), then give the platform
+        # Wait for eSCL first (fast, ~6s max), then give the platform
         # backend a short grace period to finish.  Don't block on a
-        # slow platform backend when eSCL already has results.
-        t_escl.join(timeout=timeout + 2)
+        # slow platform backend when eSCL already has results.  _await_thread
+        # pumps the macOS run loop while waiting (see its docstring) so the
+        # ImageCaptureCore platform backend isn't starved.
+        _await_thread(t_escl, timeout + 2)
         if t_platform.is_alive():
-            t_platform.join(timeout=2.0)
+            _await_thread(t_platform, 2.0)
 
         if cancel is not None and cancel.is_set():
             return []
@@ -123,16 +141,29 @@ class _CompositeBackend:
         if not escl_scanners:
             return platform_scanners
 
-        # Collect IPs from platform scanners for deduplication
         from ._mdns import extract_ip_from_uri
 
+        # Drop platform scanners that the eSCL backend also found, matched
+        # by device UUID — prefer the eSCL driver since the caller opted
+        # into it.  This is what collapses the duplicate on macOS, where
+        # ImageCaptureCore reports the same network scanner as eSCL but
+        # under a UUID device id (and with no IP in its name).  On
+        # Linux/Windows the platform ids are device URIs that never match
+        # an eSCL UUID, so nothing is dropped there.
+        escl_uuids = set(self._escl.get_scanner_uuids().values())
+        if escl_uuids:
+            platform_scanners = [
+                s for s in platform_scanners if s.id.lower() not in escl_uuids
+            ]
+
+        # Collect IPs from the remaining platform scanners for dedup.
         platform_ips: set[str] = set()
         for s in platform_scanners:
             ip = extract_ip_from_uri(s.name)
             if ip:
                 platform_ips.add(ip)
 
-        # Add eSCL scanners not already found by the platform backend
+        # Add eSCL scanners not already found by the platform backend (by IP).
         escl_ips = self._escl.get_scanner_ips()
         for s in escl_scanners:
             ip = escl_ips.get(s.id)

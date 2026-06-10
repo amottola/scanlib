@@ -680,13 +680,18 @@ class EsclBackend:
     def __init__(self) -> None:
         self._connections: dict[str, _EsclConnection] = {}
         self._source_names: dict[str, dict[ScanSource, str]] = {}
+        self._uuids: dict[str, str] = {}
 
     def list_scanners(
         self,
         timeout: float = DISCOVERY_TIMEOUT,
         cancel: threading.Event | None = None,
     ) -> list[Scanner]:
-        services = discover_escl_services(timeout=min(timeout, 4.0))
+        # Cap the discovery window: _browse_mdns early-exits as soon as a
+        # scanner resolves, so this only bounds the no-scanner case.  6s
+        # leaves enough room for a cold/sleeping scanner (or a lossy Wi-Fi
+        # link) to answer one of the retransmitted queries.
+        services = discover_escl_services(timeout=min(timeout, 6.0))
         scanners: list[Scanner] = []
 
         for svc in services:
@@ -715,6 +720,8 @@ class EsclBackend:
                 tls=svc.tls,
                 resource_path=svc.resource_path,
             )
+            if svc.uuid:
+                self._uuids[scanner_id] = svc.uuid
 
         return scanners
 
@@ -839,3 +846,7 @@ class EsclBackend:
     def get_scanner_ips(self) -> dict[str, str]:
         """Return scanner_id → IP mapping for deduplication."""
         return {sid: conn.ip for sid, conn in self._connections.items()}
+
+    def get_scanner_uuids(self) -> dict[str, str]:
+        """Return scanner_id → lowercased UUID mapping for deduplication."""
+        return {sid: uuid.lower() for sid, uuid in self._uuids.items()}

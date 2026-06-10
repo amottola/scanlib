@@ -65,7 +65,7 @@ PNG encoding is handled in `build_pdf()` (`_types.py`) using stdlib `zlib` for d
 
 ### Backend selection and thread dispatch
 
-`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. On Linux and Windows, a `_CompositeBackend` wraps the platform backend together with the eSCL backend — `list_scanners()` runs both in parallel and deduplicates by IP address. On macOS, only `MacOSBackend` is used by default (ImageCaptureCore already handles eSCL natively); setting `SCANLIB_ESCL=1` enables the composite backend on macOS too. Each backend handles its own thread safety internally:
+`_get_backend()` in `__init__.py` selects the backend by `sys.platform` and caches it globally. On Linux and Windows, a `_CompositeBackend` wraps the platform backend together with the eSCL backend — `list_scanners()` runs both in parallel and deduplicates. Deduplication is by device **UUID** first (a platform scanner whose id matches an eSCL UUID is dropped in favour of the eSCL entry, since the caller opted into the eSCL driver) and then by **IP** (an eSCL scanner whose IP a platform scanner already reported is dropped). On macOS, only `MacOSBackend` is used by default (ImageCaptureCore already handles eSCL natively); setting `SCANLIB_ESCL=1` enables the composite backend on macOS too. Because ImageCaptureCore delivers discovery callbacks on the main thread's run loop, the composite pumps the run loop (via `pump_run_loop` in `_macos.py`) while waiting for the discovery threads when called on the macOS main thread — otherwise the platform backend would be starved and return nothing. The UUID dedup is what collapses the resulting ImageCaptureCore/eSCL duplicate for the same network scanner on macOS. Each backend handles its own thread safety internally:
 
 - **SANE**: used directly (synchronous ctypes, thread-safe)
 - **macOS**: `MacOSBackend` uses a lock and main-thread dispatch — from the main thread, calls run directly; from a background thread, calls are forwarded via `performSelectorOnMainThread:withObject:waitUntilDone:` (ImageCaptureCore delivers callbacks via the main dispatch queue). Background-thread usage assumes the main thread is running a run loop.
@@ -138,7 +138,7 @@ The eSCL backend (`backends/_escl.py`) communicates directly with network scanne
 
 ### mDNS service discovery (`_mdns.py`)
 
-Built-in multicast DNS client using only `socket` and `struct`. Sends PTR queries for `_uscan._tcp.local.` and `_uscans._tcp.local.` to `224.0.0.251:5353` and parses responses for PTR, TXT, SRV, A, and AAAA records.
+Built-in multicast DNS client using only `socket` and `struct`. Sends PTR queries for `_uscan._tcp.local.` and `_uscans._tcp.local.` to `224.0.0.251:5353` and parses responses for PTR, TXT, SRV, A, and AAAA records. The query is **retransmitted** with growing intervals (capped at 1s) until a service resolves or the timeout elapses — multicast is lossy (especially over Wi-Fi) and a single query/response can be dropped or suppressed as a duplicate, which previously made discovery flaky on macOS (where the always-running `mDNSResponder` triggers duplicate suppression). A browse is only considered "answered" once a service instance resolves to an IP (`_resolvable_instances`); `_resolve_srv_addresses` links A/AAAA records carried under the SRV target hostname to the service instance name, including across separate packets.
 
 Two public APIs:
 - `get_location_map(timeout)` → `LocationMap` with IP→note and name→note mappings (used by SANE/WIA backends for the `location` property)

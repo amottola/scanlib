@@ -251,6 +251,24 @@ def _local_ipv4_addresses() -> list[str]:
     return unique
 
 
+def _resolve_srv_addresses(result: _BrowseResult) -> None:
+    """Copy SRV-target addresses onto their service instance names.
+
+    mDNS often carries the A/AAAA records under the target hostname
+    rather than the service instance name, and the two may arrive in
+    separate packets.  This links them on the accumulated result so a
+    service instance resolves to an IP even across packets.
+    """
+    for sname, srv in result.srvs.items():
+        if not result.addrs.get(sname) and result.addrs.get(srv.target):
+            result.addrs[sname] = list(result.addrs[srv.target])
+
+
+def _resolvable_instances(result: _BrowseResult) -> list[str]:
+    """Return PTR service-instance names that resolve to at least one IP."""
+    return [inst for _svc, inst in result.ptrs if result.addrs.get(inst)]
+
+
 def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
     """Send mDNS queries and collect responses.
 
@@ -305,34 +323,59 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
 
         sock.setblocking(False)
 
-        # Send PTR query.  On Windows, send on each interface so
-        # scanners on any subnet see it.
         query = _build_query(*_SERVICE_TYPES)
-        if local_addrs:
-            for addr in local_addrs:
+
+        def _send_query() -> None:
+            # On Windows, send on each interface so scanners on any
+            # subnet see the query.
+            if local_addrs:
+                for addr in local_addrs:
+                    try:
+                        sock.setsockopt(
+                            socket.IPPROTO_IP,
+                            socket.IP_MULTICAST_IF,
+                            socket.inet_aton(addr),
+                        )
+                        sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
+                    except OSError:
+                        pass
+            else:
                 try:
-                    sock.setsockopt(
-                        socket.IPPROTO_IP,
-                        socket.IP_MULTICAST_IF,
-                        socket.inet_aton(addr),
-                    )
                     sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
                 except OSError:
                     pass
-        else:
-            sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
 
-        # Collect responses with early exit: once we've received at
-        # least one response, stop after a short quiet period (no new
-        # packets) rather than waiting the full timeout.
+        # Retransmit the query with growing intervals until a response
+        # arrives or the deadline passes: multicast is unreliable
+        # (especially over Wi-Fi) and a single lost query/response — or a
+        # responder transiently suppressing a duplicate question — would
+        # otherwise yield nothing for the full timeout.  Standard mDNS
+        # one-shot queriers retransmit (RFC 6762 §5.2).  Continuing to
+        # probe across the whole window also gives a sleeping scanner time
+        # to wake and answer.  Once a response arrives, stop retransmitting
+        # and linger for a short quiet period to gather additional records.
         quiet_period = 0.5
         got_response = False
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
+        send_interval = 0.25
+        next_send_at = 0.0  # seconds since start
         while True:
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            remaining = deadline - now
             if remaining <= 0:
                 break
-            wait = min(remaining, quiet_period) if got_response else remaining
+            elapsed = now - start
+            # Fire the next (re)transmission when due, then schedule the
+            # following one a little further out (capped at 1s).
+            if not got_response and elapsed >= next_send_at:
+                _send_query()
+                next_send_at = elapsed + send_interval
+                send_interval = min(send_interval * 2, 1.0)
+            if got_response:
+                wait = min(remaining, quiet_period)
+            else:
+                wait = max(0.0, min(remaining, next_send_at - elapsed))
             readable, _, _ = select.select([sock], [], [], wait)
             if not readable:
                 if got_response:
@@ -348,7 +391,12 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
             for k, v in addrs.items():
                 result.addrs.setdefault(k, []).extend(v)
             result.srvs.update(srvs)
-            if ptrs:
+            # Only treat the browse as answered once we have a service
+            # instance that actually resolves to an IP — a bare PTR with
+            # the address records still in flight is not enough, and
+            # exiting on it would drop the scanner.
+            _resolve_srv_addresses(result)
+            if _resolvable_instances(result):
                 got_response = True
 
     except OSError:
@@ -356,6 +404,7 @@ def _browse_mdns(timeout: float = 4.0) -> _BrowseResult:
     finally:
         sock.close()
 
+    _resolve_srv_addresses(result)
     return result
 
 

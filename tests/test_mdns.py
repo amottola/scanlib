@@ -1,10 +1,14 @@
 from scanlib._mdns import (
     LocationMap,
+    _BrowseResult,
     _build_query,
     _encode_name,
     _parse_responses,
     _parse_txt,
     _read_name,
+    _resolvable_instances,
+    _resolve_srv_addresses,
+    _SrvInfo,
     extract_ip_from_uri,
 )
 
@@ -191,3 +195,38 @@ class TestParseResponses:
     def test_truncated_packet(self):
         ptrs, txts, addrs, srvs = _parse_responses(b"\x00" * 6)
         assert ptrs == []
+
+
+class TestSrvAddressResolution:
+    def test_links_srv_target_addresses_to_instance(self):
+        # A/AAAA records arrive under the host name; SRV maps the service
+        # instance to that host.  Resolution should copy the addresses onto
+        # the instance name (even across packets).
+        inst = "Brother._uscan._tcp.local."
+        host = "BRN123.local."
+        result = _BrowseResult()
+        result.ptrs.add(("_uscan._tcp.local.", inst))
+        result.srvs[inst] = _SrvInfo(target=host, port=80)
+        result.addrs[host] = ["192.168.1.23"]
+
+        assert _resolvable_instances(result) == []  # not yet linked
+        _resolve_srv_addresses(result)
+        assert result.addrs[inst] == ["192.168.1.23"]
+        assert _resolvable_instances(result) == [inst]
+
+    def test_direct_instance_address_not_overwritten(self):
+        inst = "Dev._uscan._tcp.local."
+        result = _BrowseResult()
+        result.srvs[inst] = _SrvInfo(target="host.local.", port=80)
+        result.addrs[inst] = ["10.0.0.1"]
+        result.addrs["host.local."] = ["10.0.0.2"]
+        _resolve_srv_addresses(result)
+        assert result.addrs[inst] == ["10.0.0.1"]
+
+    def test_resolvable_instances_requires_ptr_and_address(self):
+        result = _BrowseResult()
+        result.ptrs.add(("_uscan._tcp.local.", "A._uscan._tcp.local."))
+        # PTR present but no address yet → not resolvable.
+        assert _resolvable_instances(result) == []
+        result.addrs["A._uscan._tcp.local."] = ["1.2.3.4"]
+        assert _resolvable_instances(result) == ["A._uscan._tcp.local."]

@@ -74,6 +74,42 @@ def _normalize_error_code(code: int | None) -> int | None:
     return code
 
 
+def pump_run_loop(duration: float) -> None:
+    """Run the current thread's run loop for up to *duration* seconds.
+
+    ImageCaptureCore delivers browser/device callbacks on the main
+    thread's run loop and ``performSelectorOnMainThread:`` work only
+    executes while that loop is running.  Callers that would otherwise
+    block the main thread (e.g. waiting on background discovery threads)
+    must pump the loop so ICC can make progress.
+    """
+    NSRunLoop.currentRunLoop().runMode_beforeDate_(
+        NSDefaultRunLoopMode,
+        NSDate.dateWithTimeIntervalSinceNow_(duration),
+    )
+
+
+def await_thread(thread: threading.Thread, timeout: float) -> None:
+    """Wait up to *timeout* seconds for *thread* to finish.
+
+    When called on the main thread, pump the run loop while waiting so
+    the ImageCaptureCore backend (which delivers its callbacks there) can
+    make progress — a plain blocking ``join`` would starve it.  Off the
+    main thread the run loop is driven by whatever owns the main thread,
+    so a plain join is correct.  This is the macOS-specific wait used by
+    the composite backend; other platforms just join.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        thread.join(timeout)
+        return
+    deadline = time.monotonic() + timeout
+    while thread.is_alive():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        pump_run_loop(min(remaining, 0.05))
+
+
 def _measurement_factor(unit: int) -> float | None:
     """Return factor to convert from measurement unit to 1/10 mm, or None if unknown.
 
@@ -472,12 +508,8 @@ class MacOSBackend:
         t.start()
 
         if threading.current_thread() is threading.main_thread():
-            run_loop = NSRunLoop.currentRunLoop()
             while not done.is_set():
-                run_loop.runMode_beforeDate_(
-                    NSDefaultRunLoopMode,
-                    NSDate.dateWithTimeIntervalSinceNow_(0.05),
-                )
+                pump_run_loop(0.05)
         else:
             done.wait()
 
