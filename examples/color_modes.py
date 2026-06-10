@@ -1,4 +1,9 @@
-"""Scan the same page in every supported color mode."""
+"""Scan the same page in every supported color mode.
+
+The output is always in the requested mode: if a scanner ignores the
+request and returns a richer mode (e.g. RGB when grayscale was asked
+for), scanlib down-converts the page for you.
+"""
 
 import scanlib
 from scanlib import ColorMode

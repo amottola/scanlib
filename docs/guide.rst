@@ -40,6 +40,23 @@ Customize the scan with keyword arguments:
            source=ScanSource.FLATBED,
        )
 
+Color Modes
+-----------
+
+Three color modes are available: :attr:`ColorMode.COLOR` (24-bit RGB),
+:attr:`ColorMode.GRAY` (8-bit grayscale), and :attr:`ColorMode.BW`
+(1-bit black & white).
+
+scanlib always returns pages in the mode you requested.  Some scanners
+(notably over eSCL) ignore the requested mode and return a *richer* one
+— for example, RGB when you asked for grayscale.  In that case scanlib
+down-converts the page to the requested mode (COLOR → GRAY via
+luminance, GRAY/COLOR → BW via threshold), so ``scan()`` and
+``scan_pages()`` are consistent across backends.  The conversion only
+runs when the scanner actually returns a richer mode than requested; a
+page already at (or below) the requested mode is passed through
+untouched.
+
 Black & White Threshold
 -----------------------
 
@@ -239,8 +256,10 @@ To enable the eSCL backend on macOS:
    export SCANLIB_ESCL=1
 
 When enabled, eSCL discovery runs in parallel with the native backend
-and results are deduplicated by IP address.  Each scanner's ``backend``
-property indicates which backend discovered it:
+and the results are deduplicated — by device UUID first (a network
+scanner seen by both backends is reported once, preferring the eSCL
+entry since you opted into it) and then by IP address.  Each scanner's
+``backend`` property indicates which backend discovered it:
 
 .. list-table::
    :header-rows: 1
@@ -261,6 +280,52 @@ property indicates which backend discovered it:
    * - ``"escl"``
      - eSCL / AirScan (network)
      - ``escl:IP:PORT``
+
+Error Handling
+--------------
+
+All scanlib exceptions derive from :class:`ScanLibError`, so a single
+``except scanlib.ScanLibError`` catches everything.  The common
+subclasses are:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Exception
+     - Raised when
+   * - :class:`ScannerBusyError`
+     - The scanner is already in use by another session or application
+       (most scanners — network ones especially — allow only one scan
+       session at a time).  Subclass of :class:`ScanError`.
+   * - :class:`FeederEmptyError`
+     - A feeder scan was requested but the document feeder is empty.
+       Subclass of :class:`ScanError`.
+   * - :class:`ScanAborted`
+     - The scan was cancelled via :meth:`Scanner.abort`, a ``progress``
+       callback returning ``False``, or at the device.
+   * - :class:`ScannerNotOpenError`
+     - A scan/capability call was made before :meth:`Scanner.open`.
+   * - :class:`ScanError`
+     - Any other scanning failure.
+
+.. code-block:: python
+
+   import scanlib
+
+   try:
+       with scanners[0] as scanner:
+           doc = scanner.scan()
+   except scanlib.ScannerBusyError:
+       print("Scanner is busy — close any other scanning app and retry.")
+   except scanlib.ScanAborted:
+       print("Scan was cancelled.")
+   except scanlib.ScanLibError as exc:
+       print(f"Scan failed: {exc}")
+
+Because :class:`ScannerBusyError` and :class:`FeederEmptyError` subclass
+:class:`ScanError`, existing ``except ScanError`` handlers keep working;
+catch them explicitly only when you want to react differently.
 
 Thread Safety
 -------------
