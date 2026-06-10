@@ -244,7 +244,12 @@ def _init() -> None:
 def _get_devices() -> list[tuple[str, str, str, str]]:
     _ensure_lib()
     device_list = ctypes.POINTER(ctypes.POINTER(_SANE_Device))()
-    status = _lib.sane_get_devices(ctypes.byref(device_list), ctypes.c_int(0))
+    # local_only=1: enumerate only locally-attached (USB) devices.  Network
+    # scanners are handled by scanlib's own eSCL backend, so there is no need
+    # to let SANE's network backends (airscan/escl/net) probe the network —
+    # doing so is both wasteful and noisy (those C backends print HTTP 404
+    # messages to stdout/stderr during discovery).
+    status = _lib.sane_get_devices(ctypes.byref(device_list), ctypes.c_int(1))
     _check_status(status, "sane_get_devices")
 
     result = []
@@ -819,15 +824,17 @@ class SaneBackend:
             return []
         if error is not None:
             raise error
-        # Only list local (USB) scanners — network scanners are handled
-        # by the eSCL backend via the composite backend.  Skip v4l
-        # devices and deduplicate by USB bus:dev identity.
+        # _get_devices() passes local_only=1, so SANE should already exclude
+        # network scanners (those are handled by scanlib's eSCL backend via
+        # the composite backend).  The escl/airscan/IP checks below are a
+        # backstop in case a backend ignores local_only.  We still skip v4l
+        # video devices and deduplicate by USB bus:dev identity.
         scanners: list[Scanner] = []
         seen: set[str] = set()
         for dev_info in result or []:
             if dev_info[0].startswith("v4l:"):
                 continue
-            # Skip network scanners (eSCL, airscan, or anything with an IP)
+            # Backstop: skip any network scanner local_only failed to exclude.
             if dev_info[0].startswith(("escl:", "airscan:")):
                 continue
             if extract_ip_from_uri(dev_info[0]):
