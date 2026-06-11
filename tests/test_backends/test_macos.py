@@ -215,9 +215,7 @@ class TestNameAndLocation:
         # a genuine location distinct from the device name.
         from scanlib.backends._macos import _name_and_location
 
-        dev = self._dev(
-            "CanoScan LiDE 300", "USB", ImageCaptureCore.ICTransportTypeUSB
-        )
+        dev = self._dev("CanoScan LiDE 300", "USB", ImageCaptureCore.ICTransportTypeUSB)
         name, location = _name_and_location(dev)
         assert name == "CanoScan LiDE 300"
         assert location == "USB"
