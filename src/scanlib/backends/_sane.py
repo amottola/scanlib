@@ -221,17 +221,22 @@ if _lib is not None:
 # ---------------------------------------------------------------------------
 
 
+def _status_message(status: int, context: str = "") -> str:
+    """Format a human-readable message for a ``SANE_Status`` code."""
+    name = _STATUS_NAMES.get(status, f"unknown ({status})")
+    msg = f"SANE error: {name}"
+    if context:
+        msg = f"{context}: {msg}"
+    return msg
+
+
 def _status_error(status: int, context: str = "") -> ScanError:
     """Build a :class:`ScanError` for *status*, tagged with ``.sane_status``.
 
     Callers classify the failure by the numeric ``SANE_Status`` code on the
     exception rather than by parsing the message text.
     """
-    name = _STATUS_NAMES.get(status, f"unknown ({status})")
-    msg = f"SANE error: {name}"
-    if context:
-        msg = f"{context}: {msg}"
-    err = ScanError(msg)
+    err = ScanError(_status_message(status, context))
     err.sane_status = status
     return err
 
@@ -243,12 +248,9 @@ def _check_status(status: int, context: str = "") -> None:
         if status == _STATUS_IO_ERROR:
             # I/O error means communication with the device failed — it is
             # offline, asleep, or disconnected, not held by another session.
-            name = _STATUS_NAMES.get(status, f"unknown ({status})")
-            msg = f"SANE error: {name}"
-            if context:
-                msg = f"{context}: {msg}"
             raise ScannerUnavailableError(
-                f"{msg} — the scanner may be offline, asleep, or disconnected."
+                f"{_status_message(status, context)} — the scanner may be "
+                "offline, asleep, or disconnected."
             )
         raise _status_error(status, context)
 

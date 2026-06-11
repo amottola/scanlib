@@ -124,6 +124,9 @@ When scanning from a document feeder, all pages are scanned automatically:
        doc = scanner.scan(source=ScanSource.FEEDER)
        print(doc.page_count)  # Number of pages in the feeder
 
+If the feeder is empty, :class:`FeederEmptyError` is raised (consistently
+across all backends).
+
 Multi-Page Flatbed Scanning
 ---------------------------
 

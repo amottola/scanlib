@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from urllib.parse import urlparse
 
 from .._jpeg import decode_jpeg
-from .._mdns import EsclServiceInfo, discover_escl_services, extract_ip_from_uri
+from .._mdns import discover_escl_services
 from .._types import (
     DISCOVERY_TIMEOUT,
     ColorMode,
@@ -189,7 +189,6 @@ class _EsclConnection:
         """
         import time
 
-        last_status = 0
         for attempt in range(retries):
             conn = self._connect()
             conn.request(
@@ -200,7 +199,6 @@ class _EsclConnection:
             )
             resp = conn.getresponse()
             resp.read()  # drain body
-            last_status = resp.status
             if resp.status in (409, 503):
                 if attempt < retries - 1:
                     # Try cancelling any stale jobs before retrying
@@ -573,11 +571,10 @@ def _decode_png(data: bytes) -> tuple[bytes, int, int, int]:
         raise ValueError(f"Unsupported PNG color type: {color_type}")
 
     row_bytes = width * components
-    # Remove filter byte from each row
+    # Skip the per-row filter byte (decoder assumes filter type 0 / None).
     pixels = bytearray()
     for y in range(height):
         offset = y * (row_bytes + 1)
-        _filter_byte = raw_filtered[offset]
         pixels.extend(raw_filtered[offset + 1 : offset + 1 + row_bytes])
 
     return bytes(pixels), width, height, components
