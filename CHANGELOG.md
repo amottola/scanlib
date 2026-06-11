@@ -29,9 +29,18 @@
   service instance across packets.
 - **eSCL on macOS (`SCANLIB_ESCL=1`) now works under the composite
   backend.**  The composite pumps the ImageCaptureCore run loop while
-  waiting for discovery (it was previously starved and returned nothing),
-  and a scanner found by both ImageCaptureCore and eSCL is deduplicated by
-  device UUID so it appears once (preferring the eSCL driver).
+  waiting for discovery (it was previously starved and returned nothing).
+- **A network scanner found by both the platform backend and eSCL now
+  appears once on every platform.**  Deduplication matches a platform
+  scanner against an eSCL one by device UUID or by IP — including on
+  Windows, where WIA exposes the WSD device UUID (the same UUID the
+  scanner advertises over mDNS) that previously went unmatched, leaving
+  the device listed twice.  By default the platform driver wins the
+  duplicate on Linux/Windows and the eSCL driver wins on macOS; setting
+  `SCANLIB_ESCL=1` makes eSCL win everywhere.
+- **New `Scanner.uuid` property** — the lower-cased device UUID when
+  available (macOS, WIA network scanners, eSCL), or `None` (SANE).  Used
+  internally for the cross-backend deduplication above.
 - **SANE discovery no longer probes the network.**  It now passes
   `local_only`, so SANE's network backends are not asked to enumerate
   network scanners (which the eSCL backend handles).  This also silences

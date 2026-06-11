@@ -21,58 +21,78 @@ class _FakePlatform:
 class _FakeEscl:
     backend_name = "escl"
 
-    def __init__(self, scanners, uuids=None, ips=None):
+    def __init__(self, scanners, ips=None):
         self._scanners = scanners
-        self._uuids = uuids or {}
         self._ips = ips or {}
 
     def list_scanners(self, timeout=15.0, cancel=None):
         return list(self._scanners)
 
-    def get_scanner_uuids(self):
-        return dict(self._uuids)
-
     def get_scanner_ips(self):
         return dict(self._ips)
 
 
-def _make_composite(platform, escl):
+def _make_composite(platform, escl, prefer_escl=False):
     comp = _CompositeBackend.__new__(_CompositeBackend)
     comp._platform = platform
     comp._escl = escl
+    comp._prefer_escl = prefer_escl
     return comp
 
 
-def _scanner(name, backend, scanner_id):
+def _scanner(name, backend, scanner_id, uuid=None):
     return Scanner(
-        name=name, vendor=None, model=None, backend=backend, scanner_id=scanner_id
+        name=name,
+        vendor=None,
+        model=None,
+        backend=backend,
+        scanner_id=scanner_id,
+        uuid=uuid,
     )
 
 
 class TestCompositeDedup:
-    def test_uuid_match_prefers_escl(self):
-        # ImageCaptureCore reports the device under a (upper-case) UUID id;
-        # eSCL reports the same device by UUID.  The platform entry should
-        # be dropped in favour of the eSCL one.
-        uuid = "E3248000-80CE-11DB-8000-B42200A172D1"
-        platform = _FakePlatform([_scanner("Brother", "imagecapture", uuid)])
+    def test_macos_uuid_match_prefers_escl(self):
+        # macOS opts into eSCL (prefer_escl=True): ImageCaptureCore reports
+        # the device under a UUID, eSCL reports the same UUID → the platform
+        # entry is dropped in favour of the eSCL one.
+        uuid = "e3248000-80ce-11db-8000-b42200a172d1"
+        platform = _FakePlatform([_scanner("Brother", "imagecapture", uuid, uuid=uuid)])
         escl = _FakeEscl(
-            [_scanner("Brother", "escl", "escl:192.168.1.23:80")],
-            uuids={"escl:192.168.1.23:80": uuid.lower()},
+            [_scanner("Brother", "escl", "escl:192.168.1.23:80", uuid=uuid)],
             ips={"escl:192.168.1.23:80": "192.168.1.23"},
         )
-        comp = _make_composite(platform, escl)
+        comp = _make_composite(platform, escl, prefer_escl=True)
         result = comp.list_scanners(timeout=1)
         assert len(result) == 1
         assert result[0].backend == "escl"
 
+    def test_windows_uuid_match_prefers_platform(self):
+        # Windows prefers the platform driver (prefer_escl=False): WIA
+        # reports a WSD network scanner under an opaque device id with the
+        # device UUID exposed via ``uuid``; eSCL reports the same UUID → the
+        # eSCL duplicate is dropped and the WIA entry kept.
+        uuid = "cfe92100-67c4-11d4-a45f-9caed3b19c8b"
+        platform = _FakePlatform(
+            [_scanner("EPSON WF-C579RB", "wia", r"{6BDD1FC6}\0001", uuid=uuid)]
+        )
+        escl = _FakeEscl(
+            [_scanner("EPSON WF-C579RB", "escl", "escl:192.168.101.8:443", uuid=uuid)],
+            ips={"escl:192.168.101.8:443": "192.168.101.8"},
+        )
+        comp = _make_composite(platform, escl)
+        result = comp.list_scanners(timeout=1)
+        assert len(result) == 1
+        assert result[0].backend == "wia"
+
     def test_distinct_devices_both_kept(self):
         # A USB scanner only the platform sees plus a network scanner only
         # eSCL sees → both returned.
-        platform = _FakePlatform([_scanner("USB Scanner", "imagecapture", "USB-UUID")])
+        platform = _FakePlatform(
+            [_scanner("USB Scanner", "imagecapture", "USB-UUID", uuid="usb-uuid")]
+        )
         escl = _FakeEscl(
-            [_scanner("Net Scanner", "escl", "escl:192.168.1.5:80")],
-            uuids={"escl:192.168.1.5:80": "net-uuid"},
+            [_scanner("Net Scanner", "escl", "escl:192.168.1.5:80", uuid="net-uuid")],
             ips={"escl:192.168.1.5:80": "192.168.1.5"},
         )
         comp = _make_composite(platform, escl)
@@ -89,7 +109,6 @@ class TestCompositeDedup:
         )
         escl = _FakeEscl(
             [_scanner("Net", "escl", "escl:192.168.1.9:80")],
-            uuids={},
             ips={"escl:192.168.1.9:80": "192.168.1.9"},
         )
         comp = _make_composite(platform, escl)

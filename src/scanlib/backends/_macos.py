@@ -634,6 +634,7 @@ class MacOSBackend:
                     model=None,
                     backend=self.backend_name,
                     scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
+                    uuid=_safe_str(dev, "UUIDString") or None,
                     location=_safe_str(dev, "locationDescription"),
                 )
                 for dev in delegate.scanners

@@ -85,15 +85,26 @@ class _CompositeBackend:
     """Merges results from a platform backend and the eSCL backend.
 
     ``list_scanners`` runs both backends' discovery in parallel and
-    deduplicates by IP address.  Each scanner's ``_backend_impl`` points
-    to whichever backend discovered it.
+    deduplicates: a platform scanner and an eSCL scanner are the same
+    physical device when their UUIDs match or their IPs match.  Each
+    scanner's ``_backend_impl`` points to whichever backend discovered it.
+
+    *prefer_escl* decides which entry survives a duplicate.  On Linux and
+    Windows the platform driver is preferred (the platform backend is
+    always on), so the eSCL duplicate is dropped.  On macOS the eSCL
+    backend is opt-in (``SCANLIB_ESCL=1``); enabling it signals a
+    preference for the eSCL driver, so there the platform duplicate is
+    dropped instead.
     """
 
-    def __init__(self, platform_backend: ScanBackend) -> None:
+    def __init__(
+        self, platform_backend: ScanBackend, *, prefer_escl: bool = False
+    ) -> None:
         from .backends._escl import EsclBackend
 
         self._platform = platform_backend
         self._escl = EsclBackend()
+        self._prefer_escl = prefer_escl
 
     def list_scanners(
         self,
@@ -140,38 +151,46 @@ class _CompositeBackend:
 
         if not escl_scanners:
             return platform_scanners
+        if not platform_scanners:
+            return escl_scanners
 
         from ._mdns import extract_ip_from_uri
 
-        # Drop platform scanners that the eSCL backend also found, matched
-        # by device UUID — prefer the eSCL driver since the caller opted
-        # into it.  This is what collapses the duplicate on macOS, where
-        # ImageCaptureCore reports the same network scanner as eSCL but
-        # under a UUID device id (and with no IP in its name).  On
-        # Linux/Windows the platform ids are device URIs that never match
-        # an eSCL UUID, so nothing is dropped there.
-        escl_uuids = set(self._escl.get_scanner_uuids().values())
-        if escl_uuids:
-            platform_scanners = [
-                s for s in platform_scanners if s.id.lower() not in escl_uuids
-            ]
-
-        # Collect IPs from the remaining platform scanners for dedup.
-        platform_ips: set[str] = set()
-        for s in platform_scanners:
-            ip = extract_ip_from_uri(s.name)
-            if ip:
-                platform_ips.add(ip)
-
-        # Add eSCL scanners not already found by the platform backend (by IP).
+        # A platform scanner and an eSCL scanner are the same physical
+        # device when their UUIDs match or their IPs match.  The eSCL IP
+        # comes from mDNS (keyed by scanner id); the platform IP, when it
+        # has one, is parsed out of its name (e.g. a SANE ``escl:`` URI).
+        # On macOS the platform scanner exposes only a UUID, on Windows a
+        # WSD scanner exposes a UUID, on Linux a network SANE device
+        # exposes an IP — so matching on either key covers them all.  The
+        # identity sets never contain None, so a missing UUID/IP simply
+        # never matches (no explicit guard needed).
         escl_ips = self._escl.get_scanner_ips()
-        for s in escl_scanners:
-            ip = escl_ips.get(s.id)
-            if ip and ip in platform_ips:
-                continue  # already discovered by platform backend
-            platform_scanners.append(s)
 
-        return platform_scanners
+        if self._prefer_escl:
+            # Keep every eSCL entry; drop the platform duplicates.
+            escl_uuids = {s.uuid for s in escl_scanners if s.uuid}
+            escl_ip_set = set(escl_ips.values())
+            kept = [
+                s
+                for s in platform_scanners
+                if s.uuid not in escl_uuids
+                and extract_ip_from_uri(s.name) not in escl_ip_set
+            ]
+            return kept + escl_scanners
+
+        # Keep every platform entry; drop the eSCL duplicates.
+        platform_uuids = {s.uuid for s in platform_scanners if s.uuid}
+        platform_ip_set = {
+            ip for s in platform_scanners if (ip := extract_ip_from_uri(s.name))
+        }
+        kept = [
+            s
+            for s in escl_scanners
+            if s.uuid not in platform_uuids
+            and escl_ips.get(s.id) not in platform_ip_set
+        ]
+        return platform_scanners + kept
 
     # Delegate remaining methods to the scanner's own _backend_impl
     def open_scanner(self, scanner: Scanner) -> None:
@@ -202,23 +221,30 @@ def _get_backend() -> ScanBackend:
     if _backend is not None:
         return _backend
 
+    # Setting SCANLIB_ESCL=1 signals a preference for the eSCL driver over
+    # the platform driver when both discover the same device.
+    prefer_escl = os.environ.get("SCANLIB_ESCL", "").strip() == "1"
+
     if sys.platform == "linux":
         from .backends._sane import SaneBackend
 
-        _backend = _CompositeBackend(SaneBackend())
+        _backend = _CompositeBackend(SaneBackend(), prefer_escl=prefer_escl)
 
     elif sys.platform == "darwin":
         from .backends._macos import MacOSBackend
 
-        if os.environ.get("SCANLIB_ESCL", "").strip() == "1":
-            _backend = _CompositeBackend(MacOSBackend())
+        # On macOS the eSCL backend is opt-in (ImageCaptureCore already
+        # handles eSCL natively), so the composite is only used when
+        # SCANLIB_ESCL=1 — and enabling it implies preferring eSCL.
+        if prefer_escl:
+            _backend = _CompositeBackend(MacOSBackend(), prefer_escl=True)
         else:
             _backend = MacOSBackend()
 
     elif sys.platform == "win32":
         from .backends._wia import WiaBackend
 
-        _backend = _CompositeBackend(WiaBackend())
+        _backend = _CompositeBackend(WiaBackend(), prefer_escl=prefer_escl)
 
     else:
         raise BackendNotAvailableError(f"Unsupported platform: {sys.platform}")

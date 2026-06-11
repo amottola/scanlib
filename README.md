@@ -23,10 +23,10 @@ A multiplatform document scanning library for Python with platform-native scanni
 | Platform | Backend | Scanner types | eSCL | System packages |
 |---|---|---|---|---|
 | **macOS 10.7+** | ImageCaptureCore | USB + network | Opt-in (`SCANLIB_ESCL=1`) | None |
-| **Windows 10+** | WIA 2.0 | USB | Always enabled | None |
+| **Windows 10+** | WIA 2.0 | USB + network | Always enabled | None |
 | **Linux** | SANE | USB | Always enabled | `libsane-dev libjpeg-dev` |
 
-The eSCL (AirScan) backend discovers and drives network scanners directly over HTTP — no OS-level scanner drivers needed. On Linux and Windows it runs alongside the platform backend automatically. On macOS, ImageCaptureCore already handles network scanners natively; set `SCANLIB_ESCL=1` to use the eSCL backend instead.
+The eSCL (AirScan) backend discovers and drives network scanners directly over HTTP — no OS-level scanner drivers needed. On Linux and Windows it runs alongside the platform backend automatically, and a network scanner found by both is reported once (matched by device UUID or IP), preferring the platform driver. On macOS, ImageCaptureCore already handles network scanners natively, so eSCL is opt-in. Set `SCANLIB_ESCL=1` to enable eSCL on macOS, or — on any platform — to prefer the eSCL driver over the platform driver for scanners seen by both.
 
 ## Installation
 

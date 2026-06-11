@@ -670,7 +670,6 @@ class EsclBackend:
     def __init__(self) -> None:
         self._connections: dict[str, _EsclConnection] = {}
         self._source_names: dict[str, dict[ScanSource, str]] = {}
-        self._uuids: dict[str, str] = {}
 
     def list_scanners(
         self,
@@ -699,6 +698,7 @@ class EsclBackend:
                     model=None,
                     backend=self.backend_name,
                     scanner_id=scanner_id,
+                    uuid=svc.uuid,
                     location=svc.note,
                     _backend_impl=self,
                 )
@@ -710,8 +710,6 @@ class EsclBackend:
                 tls=svc.tls,
                 resource_path=svc.resource_path,
             )
-            if svc.uuid:
-                self._uuids[scanner_id] = svc.uuid
 
         return scanners
 
@@ -831,7 +829,3 @@ class EsclBackend:
     def get_scanner_ips(self) -> dict[str, str]:
         """Return scanner_id → IP mapping for deduplication."""
         return {sid: conn.ip for sid, conn in self._connections.items()}
-
-    def get_scanner_uuids(self) -> dict[str, str]:
-        """Return scanner_id → lowercased UUID mapping for deduplication."""
-        return {sid: uuid.lower() for sid, uuid in self._uuids.items()}

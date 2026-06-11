@@ -279,6 +279,7 @@ class Scanner:
         *,
         scanner_id: str | None = None,
         location: str | None = None,
+        uuid: str | None = None,
         _backend_impl: ScanBackend | None = None,
     ) -> None:
         self._name = name
@@ -287,6 +288,7 @@ class Scanner:
         self._backend = backend
         self._id = scanner_id if scanner_id is not None else name
         self._location = location
+        self._uuid = uuid.lower() if uuid else None
         self._backend_impl = _backend_impl
         self._sources: list[SourceInfo] = []
         self._defaults: ScannerDefaults | None = None
@@ -314,6 +316,18 @@ class Scanner:
         on WIA the device ID, on macOS the device UUID.
         """
         return self._id
+
+    @property
+    def uuid(self) -> str | None:
+        """Lower-cased device UUID, or ``None`` when not available.
+
+        Populated on macOS (where it equals :attr:`id`), on WIA for
+        network/WSD scanners (extracted from the WSD port name), and on
+        eSCL (from the mDNS ``UUID`` record).  ``None`` on SANE.  Used by
+        the composite backend to recognise that a platform scanner and an
+        eSCL scanner are the same physical device.
+        """
+        return self._uuid
 
     def __str__(self) -> str:
         """Human-readable scanner label suitable for UI display."""

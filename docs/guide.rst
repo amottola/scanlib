@@ -241,10 +241,10 @@ HTTP — no OS-level scanner drivers are needed.
      - Notes
    * - **Linux**
      - Always enabled
-     - Runs alongside SANE; SANE handles USB, eSCL handles network
+     - Runs alongside SANE
    * - **Windows**
      - Always enabled
-     - Runs alongside WIA; WIA handles USB, eSCL handles network
+     - Runs alongside WIA
    * - **macOS**
      - Opt-in (``SCANLIB_ESCL=1``)
      - ImageCaptureCore already handles eSCL natively
@@ -255,11 +255,20 @@ To enable the eSCL backend on macOS:
 
    export SCANLIB_ESCL=1
 
-When enabled, eSCL discovery runs in parallel with the native backend
-and the results are deduplicated — by device UUID first (a network
-scanner seen by both backends is reported once, preferring the eSCL
-entry since you opted into it) and then by IP address.  Each scanner's
-``backend`` property indicates which backend discovered it:
+When the eSCL backend runs alongside a platform backend, discovery runs
+in parallel and the results are deduplicated: a network scanner seen by
+both backends (for example a WSD scanner configured in Windows that also
+advertises eSCL over mDNS) is reported only once.  Two scanners are
+recognised as the same device when their :attr:`~scanlib.Scanner.uuid`
+values match or their IP addresses match.
+
+Which entry survives a duplicate depends on the platform.  On Linux and
+Windows the platform driver (SANE/WIA) is preferred, since it is always
+available; on macOS the eSCL entry is preferred, since enabling
+``SCANLIB_ESCL=1`` signals that you want the eSCL driver.  Setting
+``SCANLIB_ESCL=1`` on Linux or Windows flips the preference there too, so
+the eSCL entry wins everywhere.  Each scanner's ``backend`` property
+indicates which backend discovered it:
 
 .. list-table::
    :header-rows: 1

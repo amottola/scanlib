@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import math
 import queue
+import re
 import threading
 from collections.abc import Iterator
 from ctypes import HRESULT, POINTER, Structure, Union, byref, c_long, c_ulong
@@ -83,6 +84,8 @@ _WIA_DIP_DEV_ID = 2
 _WIA_DIP_DEV_NAME = 7
 _WIA_DIP_DEV_TYPE = 5
 _WIA_DIP_VEND_DESC = 3
+_WIA_DIP_PORT_NAME = 6
+_WIA_DIP_PNP_ID = 16
 
 _WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES = 3086
 _WIA_DPS_DOCUMENT_HANDLING_SELECT = 3088
@@ -543,6 +546,28 @@ def _make_propspec(prop_id: int) -> _PROPSPEC:
     return ps
 
 
+_UUID_RE = re.compile(
+    r"urn:uuid:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def _extract_wsd_uuid(*values: object) -> str | None:
+    """Pull the device UUID out of WSD port-name / PnP-id strings.
+
+    Network (WSD) scanners report a ``urn:uuid:<UUID>`` in their port name
+    and PnP id (e.g. ``urn:uuid:cfe92100-...-9caed3b19c8b/uri:...``).  This
+    is the same UUID the scanner publishes over mDNS for eSCL, so it lets
+    the composite backend dedup the WIA entry against the eSCL one.
+    """
+    for value in values:
+        if isinstance(value, str):
+            m = _UUID_RE.search(value)
+            if m:
+                return m.group(1).lower()
+    return None
+
+
 def _read_prop(storage, prop_id: int, default: object = None) -> object:
     """Read a single property value (int or str)."""
     spec = _make_propspec(prop_id)
@@ -989,12 +1014,20 @@ class WiaBackend:
             dev_id = _read_prop(storage, _WIA_DIP_DEV_ID, "")
             name = _read_prop(storage, _WIA_DIP_DEV_NAME, "Unknown Scanner")
 
+            # Network (WSD) scanners carry a urn:uuid in their port name /
+            # PnP id that matches the eSCL mDNS UUID — expose it so the
+            # composite backend can dedup against the eSCL entry.
+            port_name = _read_prop(storage, _WIA_DIP_PORT_NAME, "")
+            pnp_id = _read_prop(storage, _WIA_DIP_PNP_ID, "")
+            uuid = _extract_wsd_uuid(port_name, pnp_id)
+
             scanner = Scanner(
                 name=str(name),
                 vendor=None,
                 model=None,
                 backend=self.backend_name,
                 scanner_id=str(dev_id),
+                uuid=uuid,
             )
             scanners.append(scanner)
         return scanners
