@@ -1,81 +1,52 @@
 # Changelog
 
-## 1.3.0 (2026-06-11)
+## 1.3.0
 
 ### New features
 
-- **`ScannerBusyError`** — raised when a scanner is already in use by
-  another session or application (most scanners, network ones especially,
-  allow only one scan session at a time).  Subclass of `ScanError`, so
-  existing `except ScanError` handlers keep working.  Mapped from each
-  backend's native busy signal: ImageCaptureCore `-47`/in-use codes
-  (macOS), `SANE_STATUS_DEVICE_BUSY`, eSCL HTTP 409/503, and WIA
-  `WIA_ERROR_BUSY`/`WIA_ERROR_DEVICE_LOCKED`.
+- **`ScannerBusyError`** — raised when a scanner is already in use by another
+  session or application.  Subclass of `ScanError`, mapped from each backend's
+  native busy signal (ImageCaptureCore in-use codes, `SANE_STATUS_DEVICE_BUSY`,
+  eSCL HTTP 409/503, WIA busy/locked errors).
+- **`Scanner.uuid`** — lower-cased device UUID when available (macOS, WIA
+  network scanners, eSCL); `None` on SANE.  Identifies the same physical
+  device across backends.
 
 ### Improvements
 
-- **The requested color mode is always honoured.**  Some scanners
-  (notably over eSCL) return a richer mode than requested — e.g. RGB when
-  grayscale was asked for.  `scan()` and `scan_pages()` now down-convert
-  such pages to the requested mode consistently across all backends
-  (COLOR → GRAY via luminance, GRAY/COLOR → BW via threshold).  The
-  conversion runs only when the scanner actually returns a richer mode,
-  so there is no extra cost in the common case.
-- **eSCL discovery is far more reliable.**  The mDNS query is now
-  retransmitted with growing intervals until a scanner resolves or the
-  timeout elapses — multicast is lossy (especially over Wi-Fi) and a
-  single query/response can be dropped or suppressed as a duplicate — and
-  address records carried under the SRV target hostname are linked to the
-  service instance across packets.
-- **eSCL on macOS (`SCANLIB_ESCL=1`) now works under the composite
-  backend.**  The composite pumps the ImageCaptureCore run loop while
-  waiting for discovery (it was previously starved and returned nothing).
-- **A network scanner found by both the platform backend and eSCL now
-  appears once on every platform.**  Deduplication matches a platform
-  scanner against an eSCL one by device UUID or by IP — including on
-  Windows, where WIA exposes the WSD device UUID (the same UUID the
-  scanner advertises over mDNS) that previously went unmatched, leaving
-  the device listed twice.  By default the platform driver wins the
-  duplicate on Linux/Windows and the eSCL driver wins on macOS; setting
+- **A network scanner found by both a platform backend and eSCL is now
+  reported once on every platform**, matched by UUID or IP.  The platform
+  driver wins the duplicate by default (eSCL on macOS, where it is opt-in);
   `SCANLIB_ESCL=1` makes eSCL win everywhere.
-- **New `Scanner.uuid` property** — the lower-cased device UUID when
-  available (macOS, WIA network scanners, eSCL), or `None` (SANE).  Used
-  internally for the cross-backend deduplication above.
-- **SANE discovery no longer probes the network.**  It now passes
-  `local_only`, so SANE's network backends are not asked to enumerate
-  network scanners (which the eSCL backend handles).  This also silences
-  the HTTP 404 messages those backends printed to stdout/stderr during
-  discovery.
-- **macOS no longer reports a redundant location.**  When ImageCaptureCore
-  echoes the device name as its `locationDescription` (its behaviour when
-  no real location is set), `Scanner.location` is now `None`.  `str(scanner)`
-  also prefers the full device name over a bare manufacturer, so the
-  display label is unchanged in that case.
-- **WIA now reports the real manufacturer and model.**  `Scanner.vendor`
-  and `Scanner.model` were always `None` on Windows because WIA only exposes
-  the *driver* vendor (e.g. "Microsoft" for WSD scanners).  They are now
-  read from the Windows PnP property store (`DEVPKEY_Device_Manufacturer` /
-  `DEVPKEY_Device_Model` via `cfgmgr32`) — e.g. `"EPSON"` / `"WF-C579RB"`.
-  Falls back to `None` when the device does not expose them.
-- **`str(scanner)` matches the name the OS shows.**  Each backend now
-  supplies a display label: `vendor model` on SANE (whose `name` is a
-  device URI), and the native device name on macOS, WIA, and eSCL.  This
-  fixes Windows, where populating vendor/model had made `str(scanner)`
-  diverge from the WIA device name.  `location`, when set, still takes
-  precedence.
+- **WIA now reports the real manufacturer and model**, read from the Windows
+  PnP property store via `cfgmgr32` — WIA itself only exposes the driver
+  vendor (e.g. "Microsoft" for WSD scanners).
+- **`str(scanner)` matches the name the OS shows** — `vendor model` on SANE
+  (whose `name` is a device URI), the native device name on macOS/WIA/eSCL.
+  `location`, when set, still takes precedence.
+- **The requested color mode is always honoured.**  Pages a scanner returns
+  in a richer mode than requested (e.g. RGB for grayscale, common over eSCL)
+  are down-converted consistently across all backends.
+- **eSCL discovery is far more reliable.**  The mDNS query is retransmitted
+  with growing intervals until a scanner resolves, and address records carried
+  under the SRV target hostname are linked across packets.
+- **eSCL works under the composite backend on macOS** (`SCANLIB_ESCL=1`) — the
+  ImageCaptureCore run loop is pumped during discovery, which previously
+  starved the platform backend.
+- **SANE no longer probes the network** (passes `local_only`), leaving network
+  scanners to eSCL and silencing the HTTP 404 noise its network backends
+  printed during discovery.
+- macOS no longer reports a redundant `location` when ImageCaptureCore echoes
+  the device name as its `locationDescription`.
 
 ### Bug fixes
 
-- **eSCL discovery no longer misreports non-scanner devices (iPhones,
-  Macs, VMs) as scanners.**  The mDNS browser binds the multicast port and
-  so also receives unsolicited announcements for unrelated services on the
-  LAN (screen sharing on `_rfb._tcp`, AirPlay, `_companion-link`, …); the
-  PTR parser accepted all of them.  It now keeps only PTR records for the
-  `_uscan._tcp`/`_uscans._tcp` service types actually queried.
-- eSCL discovery no longer reports unusable, duplicate entries for
-  scanners that advertise a link-local (`fe80::…`) address — link-local
-  addresses are not connectable without a zone scope, so they are skipped
-  and IPv4 is preferred.
+- **eSCL discovery no longer misreports non-scanner devices (iPhones, Macs,
+  VMs) as scanners.**  The mDNS browser also receives unrelated service
+  announcements on the LAN (screen sharing, AirPlay, …); it now keeps only
+  PTR records for the `_uscan`/`_uscans` service types it queries.
+- **eSCL discovery skips link-local (`fe80::…`) addresses** — not connectable
+  without a zone scope — and prefers IPv4, avoiding unusable duplicate entries.
 
 ## 1.2.0
 
