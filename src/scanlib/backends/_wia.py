@@ -1137,6 +1137,9 @@ class WiaBackend:
                 backend=self.backend_name,
                 scanner_id=str(dev_id),
                 uuid=uuid,
+                # WIA scan dialogs show the WIA device name; vendor/model
+                # come from the PnP store and would not match.
+                display_name=str(name),
             )
             scanners.append(scanner)
         return scanners

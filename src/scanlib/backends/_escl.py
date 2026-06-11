@@ -700,6 +700,8 @@ class EsclBackend:
                     scanner_id=scanner_id,
                     uuid=svc.uuid,
                     location=svc.note,
+                    # AirScan/AirPrint UIs show the mDNS `ty` record (name).
+                    display_name=svc.name,
                     _backend_impl=self,
                 )
             )

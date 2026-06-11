@@ -57,6 +57,12 @@
   read from the Windows PnP property store (`DEVPKEY_Device_Manufacturer` /
   `DEVPKEY_Device_Model` via `cfgmgr32`) — e.g. `"EPSON"` / `"WF-C579RB"`.
   Falls back to `None` when the device does not expose them.
+- **`str(scanner)` matches the name the OS shows.**  Each backend now
+  supplies a display label: `vendor model` on SANE (whose `name` is a
+  device URI), and the native device name on macOS, WIA, and eSCL.  This
+  fixes Windows, where populating vendor/model had made `str(scanner)`
+  diverge from the WIA device name.  `location`, when set, still takes
+  precedence.
 
 ### Bug fixes
 

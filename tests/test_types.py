@@ -70,6 +70,29 @@ class TestScanner:
         )
         assert str(s) == "2nd Floor"
 
+    def test_str_uses_display_name(self):
+        # The backend-supplied display_name (the OS name) wins over the
+        # generic vendor/model and name fallbacks.
+        s = Scanner(
+            name="EPSONB19C8B (WF-C579RB)",
+            vendor="EPSON",
+            model="WF-C579RB",
+            backend="wia",
+            display_name="EPSONB19C8B (WF-C579RB)",
+        )
+        assert str(s) == "EPSONB19C8B (WF-C579RB)"
+
+    def test_str_location_beats_display_name(self):
+        s = Scanner(
+            name="dev",
+            vendor=None,
+            model=None,
+            backend="escl",
+            display_name="EPSON WF-C579RB",
+            location="Reception",
+        )
+        assert str(s) == "Reception"
+
     def test_str_vendor_and_model(self):
         s = Scanner(
             name="epson:usb:001", vendor="Epson", model="GT-S50", backend="sane"

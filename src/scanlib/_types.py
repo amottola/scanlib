@@ -280,6 +280,7 @@ class Scanner:
         scanner_id: str | None = None,
         location: str | None = None,
         uuid: str | None = None,
+        display_name: str | None = None,
         _backend_impl: ScanBackend | None = None,
     ) -> None:
         self._name = name
@@ -289,6 +290,10 @@ class Scanner:
         self._id = scanner_id if scanner_id is not None else name
         self._location = location
         self._uuid = uuid.lower() if uuid else None
+        # OS-matching display label computed by the discovering backend
+        # (e.g. "vendor model" on SANE, the native device name elsewhere).
+        # str(scanner) uses it; None falls back to the generic logic below.
+        self._display_name = display_name
         self._backend_impl = _backend_impl
         self._sources: list[SourceInfo] = []
         self._defaults: ScannerDefaults | None = None
@@ -330,14 +335,20 @@ class Scanner:
         return self._uuid
 
     def __str__(self) -> str:
-        """Human-readable scanner label suitable for UI display."""
+        """Human-readable scanner label suitable for UI display.
+
+        Returns the device's ``location`` when one is set; otherwise the
+        backend-computed ``display_name``, which matches what the OS shows
+        as the scanner's name (``vendor model`` on SANE, the native device
+        name on macOS/WIA/eSCL).  Falls back to a generic best-effort label
+        when no ``display_name`` was supplied (e.g. a scanner opened by id).
+        """
         if self._location:
             return self._location
+        if self._display_name:
+            return self._display_name
         if self._vendor and self._model:
             return f"{self._vendor} {self._model}"
-        # Prefer the (always-populated, usually most descriptive) name over
-        # a lone brand: on macOS the device reports a manufacturer but no
-        # model, so a bare vendor would otherwise win over the full name.
         return self._name or self._vendor or self._model
 
     @property

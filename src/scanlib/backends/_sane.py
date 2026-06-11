@@ -849,12 +849,21 @@ class SaneBackend:
                 if dev_id in seen:
                     continue
                 seen.add(dev_id)
+            vendor = dev_info[1] or None
+            model = dev_info[2] or None
+            # SANE's name is the device URI, not a human label; `scanimage
+            # -L` shows "vendor model", so match that.
+            if vendor and model:
+                display_name = f"{vendor} {model}"
+            else:
+                display_name = model or vendor or dev_info[0]
             scanners.append(
                 Scanner(
                     name=dev_info[0],
-                    vendor=dev_info[1] or None,
-                    model=dev_info[2] or None,
+                    vendor=vendor,
+                    model=model,
                     backend=self.backend_name,
+                    display_name=display_name,
                     _backend_impl=self,
                 )
             )

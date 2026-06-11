@@ -643,6 +643,8 @@ class MacOSBackend:
                     scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
                     uuid=_safe_str(dev, "UUIDString") or None,
                     location=_location(dev),
+                    # Image Capture shows the device name verbatim.
+                    display_name=dev.name(),
                 )
                 for dev in delegate.scanners
             ]
