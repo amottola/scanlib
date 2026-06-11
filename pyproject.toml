@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scanlib"
-version = "1.2.0"
+version = "1.3.0"
 description = "A multiplatform document scanning library for Python"
 readme = "README.md"
 license = {text = "MIT"}

@@ -486,8 +486,8 @@ def _build_scan_settings(
     res_el2.text = str(options.dpi)
 
     # Color mode — request Grayscale8 for BW since many scanners don't
-    # support BlackAndWhite1 via eSCL; client-side conversion to 1-bit
-    # is handled by _decode_scan_response.
+    # support BlackAndWhite1 via eSCL; the client-side conversion to 1-bit
+    # is handled centrally in Scanner.scan_pages (via _coerce_color_mode).
     escl_color = _COLOR_MODE_TO_ESCL.get(options.color_mode, "RGB24")
     if escl_color == "BlackAndWhite1":
         escl_color = "Grayscale8"
