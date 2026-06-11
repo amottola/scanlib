@@ -24,6 +24,7 @@ from .._types import (
     ScanAborted,
     ScanError,
     ScannerBusyError,
+    ScannerUnavailableError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -51,12 +52,38 @@ _COLOR_MODE_TO_PIXEL_DATA_TYPE = {
 # ICScannerTransferMode
 _TRANSFER_MODE_MEMORY_BASED = 1
 
-# NSError codes (in the com.apple.imagecapture domain) that mean the device is
-# already in use by another session/application and cannot be opened.  -47 is
-# the classic macOS ``fBsyErr`` (resource busy), which is what real network
-# scanners (e.g. Brother) return when another app holds the session; the
-# -9924/-9925 ICReturn codes are the documented in-use values.
-_BUSY_ERROR_CODES = frozenset({-47, -9924, -9925})
+# ImageCaptureCore status codes (signed 32-bit), from ICReturnCodes.h.  All
+# error classification is done by code, never by parsing the (localised,
+# vendor-specific) NSError message string.
+_FBSY_ERR = -47  # classic macOS fBsyErr (resource busy)
+_IC_SCAN_OPERATION_CANCELED = -9924  # ICReturnScanOperationCanceled
+_IC_SCANNER_IN_USE_BY_LOCAL_USER = -9925  # ICReturnScannerInUseByLocalUser
+_IC_SCANNER_IN_USE_BY_REMOTE_USER = -9926  # ICReturnScannerInUseByRemoteUser
+# Legacy ICLegacyReturnCode* communication-layer failures.
+_IC_LEGACY_COMMUNICATION_ERR = -9900  # ICLegacyReturnCodeCommunicationErr
+_IC_LEGACY_DEVICE_NOT_FOUND_ERR = -9901  # ICLegacyReturnCodeDeviceNotFoundErr
+_IC_LEGACY_DEVICE_NOT_OPEN_ERR = -9902  # ICLegacyReturnCodeDeviceNotOpenErr
+
+# Device is already in use by another session/application and cannot be opened.
+# -47 is what real network scanners (e.g. Brother) return when another app holds
+# the session; -9925/-9926 are ImageCaptureCore's documented in-use values.
+_BUSY_ERROR_CODES = frozenset(
+    {_FBSY_ERR, _IC_SCANNER_IN_USE_BY_LOCAL_USER, _IC_SCANNER_IN_USE_BY_REMOTE_USER}
+)
+
+# The device object exists (it was discovered) but the hardware can't be
+# reached — offline, asleep, or disconnected.  Distinct from busy: the device
+# isn't held by anyone, it just didn't answer.
+_UNAVAILABLE_ERROR_CODES = frozenset(
+    {
+        _IC_LEGACY_COMMUNICATION_ERR,
+        _IC_LEGACY_DEVICE_NOT_FOUND_ERR,
+        _IC_LEGACY_DEVICE_NOT_OPEN_ERR,
+    }
+)
+
+# Scan was cancelled (by the user at the device, or programmatically).
+_CANCEL_ERROR_CODES = frozenset({_IC_SCAN_OPERATION_CANCELED})
 
 
 def _normalize_error_code(code: int | None) -> int | None:
@@ -72,6 +99,14 @@ def _normalize_error_code(code: int | None) -> int | None:
     if code > 0x7FFFFFFF:
         code -= 0x100000000
     return code
+
+
+def _error_code(error) -> int | None:
+    """Return the normalized signed status code of an NSError, or None."""
+    try:
+        return _normalize_error_code(int(error.code()))
+    except Exception:
+        return None
 
 
 def pump_run_loop(duration: float) -> None:
@@ -197,10 +232,7 @@ class _ScanDelegate(NSObject):
     def device_didOpenSessionWithError_(self, device, error):
         if error:
             self.error = str(error)
-            try:
-                self.error_code = _normalize_error_code(int(error.code()))
-            except Exception:
-                self.error_code = None
+            self.error_code = _error_code(error)
         else:
             self.session_open = True
         self._open_event.set()
@@ -238,6 +270,7 @@ class _ScanDelegate(NSObject):
     def scannerDevice_didCompleteScanWithError_(self, device, error):
         if error:
             self.error = str(error)
+            self.error_code = _error_code(error)
         self._scan_done.set()
 
     def device_didCloseSessionWithError_(self, device, error):
@@ -439,6 +472,34 @@ def _safe_str(dev, attr: str) -> str | None:
         return None
 
 
+def _name_and_location(dev) -> tuple[str | None, str | None]:
+    """Compute the (display name, location) pair for an ICDevice.
+
+    ImageCaptureCore's ``locationDescription`` is *not* a physical location
+    for network scanners: over TCP/IP it returns the device's Bonjour name —
+    the label macOS itself shows (e.g. ``"PLC"``, ``"Piano 1°"``) — while
+    ``name`` is only the generic model series (e.g. ``"EPSON … Series"``).
+    So for network devices the location string is really the display name;
+    surface it as such and leave ``location`` unset rather than echoing the
+    same value in both fields.
+
+    For USB/FireWire/etc. devices ``locationDescription`` is the standard bus
+    descriptor (``"USB"``, …) — a genuine location — so keep it as the
+    location and use the device name as the display name.
+    """
+    name = _safe_str(dev, "name")
+    loc = _safe_str(dev, "locationDescription")
+    try:
+        transport = dev.transportType()
+    except Exception:
+        transport = None
+    if transport is not None and transport == ImageCaptureCore.ICTransportTypeTCPIP:
+        # Bonjour name: the OS-displayed name, not a location.
+        return (loc or name), None
+    # Bus-attached device: locationDescription is the bus type.
+    return name, (loc if loc and loc != name else None)
+
+
 class MacOSBackend:
     backend_name = "imagecapture"
     """macOS scanning backend using ImageCaptureCore.
@@ -627,27 +688,24 @@ class MacOSBackend:
                 if uid not in self._devices:
                     self._devices[uid] = dev
 
-            def _location(dev):
-                # ImageCaptureCore echoes the device name as the location
-                # description when no real location is set — treat that as
-                # "no location" rather than surfacing a redundant string.
-                loc = _safe_str(dev, "locationDescription")
-                return loc if loc and loc != dev.name() else None
-
-            return [
-                Scanner(
-                    name=dev.name(),
-                    vendor=_safe_str(dev, "manufacturer"),
-                    model=None,
-                    backend=self.backend_name,
-                    scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
-                    uuid=_safe_str(dev, "UUIDString") or None,
-                    location=_location(dev),
-                    # Image Capture shows the device name verbatim.
-                    display_name=dev.name(),
+            scanners = []
+            for dev in delegate.scanners:
+                display_name, location = _name_and_location(dev)
+                scanners.append(
+                    Scanner(
+                        name=dev.name(),
+                        vendor=_safe_str(dev, "manufacturer"),
+                        model=None,
+                        backend=self.backend_name,
+                        scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
+                        uuid=_safe_str(dev, "UUIDString") or None,
+                        location=location,
+                        # The label Image Capture shows (Bonjour name for
+                        # network scanners, device name otherwise).
+                        display_name=display_name,
+                    )
                 )
-                for dev in delegate.scanners
-            ]
+            return scanners
 
         return self._on_main(_build_list)
 
@@ -690,6 +748,12 @@ class MacOSBackend:
                     f"Scanner {scanner.name!r} is in use by another application "
                     "or host (e.g. Image Capture, Preview, or a vendor tool). "
                     "Close it and try again."
+                )
+            if last_error_code in _UNAVAILABLE_ERROR_CODES:
+                raise ScannerUnavailableError(
+                    f"Scanner {scanner.name!r} is unavailable — it may be "
+                    "offline, asleep, or disconnected. Check that it is powered "
+                    "on and reachable, then try again."
                 )
             raise ScanError(f"Failed to open device session: {last_error}")
 
@@ -885,65 +949,9 @@ class MacOSBackend:
             time.sleep(0.5)
 
             is_feeder = options.source == ScanSource.FEEDER
-            all_pages: list[ScannedPage] = []
-
-            while True:
-                scan_delegate._scan_done.clear()
-                scan_delegate.error = None
-                scan_delegate.completed_pages = []
-                scan_delegate._current_bands = []
-                scan_delegate._rows_received = 0
-                scan_delegate._last_pct = 0
-                scan_delegate._aborted = False
-                scan_delegate._expected_height = expected_height
-                scan_delegate._progress = options.progress
-
-                check_progress(options.progress, -1)
-
-                self._on_main(device.requestScan)
-
-                # Poll with short timeouts so scanner.abort() is responsive.
-                while not scan_delegate._scan_done.wait(timeout=0.25):
-                    if scanner._abort_event.is_set():
-                        self._on_main(device.cancelScan)
-                        raise ScanAborted("Scan aborted")
-
-                if scan_delegate._aborted:
-                    self._on_main(device.cancelScan)
-                    raise ScanAborted("Scan aborted by user")
-
-                if scan_delegate.error:
-                    err_lower = scan_delegate.error.lower()
-                    if "cancel" in err_lower or "abort" in err_lower:
-                        raise ScanAborted(
-                            f"Scan cancelled by device: {scan_delegate.error}"
-                        )
-                    raise ScanError(f"Scan failed: {scan_delegate.error}")
-
-                # Flush the last (or only) page
-                if scan_delegate._current_bands:
-                    scan_delegate._finish_page()
-
-                if not scan_delegate.completed_pages:
-                    if is_feeder:
-                        raise FeederEmptyError("No documents in feeder")
-                    raise ScanError("Scan completed but no image data was received")
-
-                for bands, w, h, bpc, nc, pdt in scan_delegate.completed_pages:
-                    raw, width, height, mode = _assemble_image(
-                        bands, w, h, bpc, nc, pdt
-                    )
-                    all_pages.append(
-                        ScannedPage(
-                            data=raw,
-                            width=width,
-                            height=height,
-                            color_mode=mode,
-                        )
-                    )
-
-                if not is_feeder:
-                    break
+            all_pages = self._collect_scan_rounds(
+                scanner, device, scan_delegate, options, is_feeder, expected_height
+            )
 
             check_progress(options.progress, 100)
             return all_pages
@@ -951,3 +959,96 @@ class MacOSBackend:
             raise
         except Exception as exc:
             raise ScanError(f"Scan failed: {exc}") from exc
+
+    def _collect_scan_rounds(
+        self,
+        scanner: Scanner,
+        device,
+        scan_delegate,
+        options: ScanOptions,
+        is_feeder: bool,
+        expected_height: int,
+    ) -> list[ScannedPage]:
+        """Drive ``requestScan`` rounds and gather the resulting pages.
+
+        A flatbed scan runs exactly one round.  A feeder keeps scanning until
+        a round yields no page: ImageCaptureCore signals the end of the stack
+        with an empty pass — or, on some devices, a "no documents in feeder"
+        completion error.  Either way that is the normal terminator once at
+        least one page has been collected, so the run stops and returns the
+        pages instead of surfacing the condition as an error.  Only an empty
+        *first* round means the feeder was genuinely empty.
+        """
+        all_pages: list[ScannedPage] = []
+
+        while True:
+            scan_delegate._scan_done.clear()
+            scan_delegate.error = None
+            scan_delegate.error_code = None
+            scan_delegate.completed_pages = []
+            scan_delegate._current_bands = []
+            scan_delegate._rows_received = 0
+            scan_delegate._last_pct = 0
+            scan_delegate._aborted = False
+            scan_delegate._expected_height = expected_height
+            scan_delegate._progress = options.progress
+
+            check_progress(options.progress, -1)
+
+            self._on_main(device.requestScan)
+
+            # Poll with short timeouts so scanner.abort() is responsive.
+            while not scan_delegate._scan_done.wait(timeout=0.25):
+                if scanner._abort_event.is_set():
+                    self._on_main(device.cancelScan)
+                    raise ScanAborted("Scan aborted")
+
+            if scan_delegate._aborted:
+                self._on_main(device.cancelScan)
+                raise ScanAborted("Scan aborted by user")
+
+            # Flush the last (or only) page and collect this round's pages
+            # *before* interpreting any completion error: a feeder's final
+            # pass can deliver a sheet and then report "no documents".
+            if scan_delegate._current_bands:
+                scan_delegate._finish_page()
+
+            new_pages = list(scan_delegate.completed_pages)
+            for bands, w, h, bpc, nc, pdt in new_pages:
+                raw, width, height, mode = _assemble_image(bands, w, h, bpc, nc, pdt)
+                all_pages.append(
+                    ScannedPage(
+                        data=raw,
+                        width=width,
+                        height=height,
+                        color_mode=mode,
+                    )
+                )
+
+            if scan_delegate.error:
+                if scan_delegate.error_code in _CANCEL_ERROR_CODES:
+                    raise ScanAborted(
+                        f"Scan cancelled by device: {scan_delegate.error}"
+                    )
+                # ImageCaptureCore has no "feeder empty" code, so the pass
+                # after the last sheet surfaces as a generic, vendor-specific
+                # scanner error.  Once we've collected at least one page that
+                # is the normal end-of-feeder signal, not a failure — stop and
+                # return what we scanned instead of discarding it.
+                if is_feeder and all_pages:
+                    break
+                raise ScanError(f"Scan failed: {scan_delegate.error}")
+
+            if not new_pages:
+                # An empty pass ends a feeder run once pages exist; otherwise
+                # the feeder was empty to begin with.
+                if is_feeder:
+                    if all_pages:
+                        break
+                    raise FeederEmptyError("No documents in feeder")
+                raise ScanError("Scan completed but no image data was received")
+
+            if not is_feeder:
+                break
+
+        return all_pages

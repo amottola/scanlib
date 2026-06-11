@@ -6,13 +6,18 @@ import pytest
 
 from scanlib._types import (
     ColorMode,
+    FeederEmptyError,
+    Scanner,
     ScanArea,
+    ScanError,
     ScannerBusyError,
+    ScannerUnavailableError,
     ScanOptions,
     ScanSource,
     SourceInfo,
 )
 from scanlib.backends._escl import (
+    EsclBackend,
     _build_scan_settings,
     _decode_scan_response,
     _escl_to_tenths_mm,
@@ -62,6 +67,77 @@ class TestCreateJobBusy:
 
         with pytest.raises(ScannerBusyError):
             conn.create_job("<xml/>", retries=2, delay=0)
+
+
+class TestOpenUnavailable:
+    def test_connection_failure_raises_scanner_unavailable(self, monkeypatch):
+        backend = EsclBackend()
+        scanner = Scanner(
+            "Scanner", None, None, "escl", scanner_id="escl:1.2.3.4:80"
+        )
+        conn = _EsclConnection("1.2.3.4", 80, tls=False, resource_path="eSCL")
+
+        def _refuse():
+            raise ConnectionRefusedError("Connection refused")
+
+        monkeypatch.setattr(conn, "get_capabilities", _refuse)
+        backend._connections[scanner.id] = conn
+
+        with pytest.raises(ScannerUnavailableError):
+            backend.open_scanner(scanner)
+
+
+class _FakeScanConn:
+    """Stand-in connection for EsclBackend.scan_pages.
+
+    ``docs`` is a list of (body, content_type) tuples; get_next_document
+    hands them out in order, then returns None (HTTP 404 -> no more pages).
+    """
+
+    def __init__(self, docs):
+        self._docs = list(docs)
+        self._current_job = None
+        self.deleted = False
+
+    def create_job(self, settings_xml, **kwargs):
+        self._current_job = "/eSCL/ScanJobs/1"
+        return self._current_job
+
+    def get_next_document(self, job_path):
+        return self._docs.pop(0) if self._docs else None
+
+    def delete_job(self, job_path):
+        self.deleted = True
+        self._current_job = None
+
+
+class TestScanPagesMatrix:
+    def _run(self, monkeypatch, docs, source):
+        from scanlib.backends import _escl
+
+        monkeypatch.setattr(_escl, "_decode_scan_response", lambda data, ct: object())
+        backend = EsclBackend()
+        scanner = Scanner("S", None, None, "escl", scanner_id="escl:1.2.3.4:80")
+        backend._connections[scanner.id] = _FakeScanConn(docs)
+        return list(backend.scan_pages(scanner, ScanOptions(source=source)))
+
+    def test_feeder_with_pages(self, monkeypatch):
+        docs = [(b"a", "image/jpeg"), (b"b", "image/jpeg")]
+        pages = self._run(monkeypatch, docs, ScanSource.FEEDER)
+        assert len(pages) == 2
+
+    def test_feeder_empty_raises_feeder_empty(self, monkeypatch):
+        with pytest.raises(FeederEmptyError):
+            self._run(monkeypatch, [], ScanSource.FEEDER)
+
+    def test_flatbed_with_page(self, monkeypatch):
+        pages = self._run(monkeypatch, [(b"a", "image/jpeg")], ScanSource.FLATBED)
+        assert len(pages) == 1
+
+    def test_flatbed_no_data_raises_scan_error(self, monkeypatch):
+        with pytest.raises(ScanError) as exc_info:
+            self._run(monkeypatch, [], ScanSource.FLATBED)
+        assert not isinstance(exc_info.value, FeederEmptyError)
 
 
 # ---------------------------------------------------------------------------

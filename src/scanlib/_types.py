@@ -47,6 +47,24 @@ class ScannerBusyError(ScanError):
         super().__init__(message)
 
 
+class ScannerUnavailableError(ScanError):
+    """The scanner could not be reached (offline, asleep, or disconnected).
+
+    Unlike :class:`ScannerBusyError`, the device is not held by another
+    session — it simply did not respond.  This is often transient (a network
+    scanner that has gone to sleep) and worth retrying once the device is
+    reachable again.
+    """
+
+    _DEFAULT = (
+        "Scanner is unavailable — it may be offline, asleep, or disconnected. "
+        "Check that it is powered on and reachable, then try again."
+    )
+
+    def __init__(self, message: str = _DEFAULT) -> None:
+        super().__init__(message)
+
+
 class ScannerNotOpenError(ScanLibError):
     """Operation requires an open scanner session."""
 

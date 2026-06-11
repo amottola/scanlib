@@ -66,6 +66,7 @@ from .._types import (
     ScanAborted,
     ScanError,
     ScannerBusyError,
+    ScannerUnavailableError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -120,6 +121,16 @@ _WIA_ERROR_PAPER_EMPTY = -2145320957  # 0x80210003
 _WIA_ERROR_BUSY = -2145320954  # 0x80210006
 _WIA_ERROR_DEVICE_LOCKED = -2145320947  # 0x8021000D
 _WIA_BUSY_ERRORS = frozenset({_WIA_ERROR_BUSY, _WIA_ERROR_DEVICE_LOCKED})
+# HRESULTs that mean the device couldn't be reached — offline, asleep, or
+# disconnected — rather than held by another session.
+_WIA_ERROR_OFFLINE = -2145320955  # 0x80210005
+_WIA_ERROR_DEVICE_COMM = -2145320950  # 0x8021000A (DEVICE_COMMUNICATION)
+_WIA_UNAVAILABLE_ERRORS = frozenset({_WIA_ERROR_OFFLINE, _WIA_ERROR_DEVICE_COMM})
+# Generic Windows cancellation HRESULTs (a device-initiated cancel; a
+# caller-initiated abort is detected separately via the callback).
+_E_ABORT = -2147467260  # 0x80004004
+_WIA_ERROR_CANCELLED = -2147023673  # 0x800704C7 HRESULT_FROM_WIN32(ERROR_CANCELLED)
+_WIA_CANCEL_ERRORS = frozenset({_E_ABORT, _WIA_ERROR_CANCELLED})
 
 # Property attribute flags (from WiaDef.h)
 _WIA_PROP_RANGE = 0x10
@@ -1149,8 +1160,15 @@ class WiaBackend:
             dm = self._create_device_manager()
             root_item = dm.CreateDevice(0, scanner.id)
         except Exception as exc:
-            if getattr(exc, "hresult", None) in _WIA_BUSY_ERRORS:
+            hr = getattr(exc, "hresult", None)
+            if hr in _WIA_BUSY_ERRORS:
                 raise ScannerBusyError() from exc
+            if hr in _WIA_UNAVAILABLE_ERRORS:
+                raise ScannerUnavailableError(
+                    f"Scanner {scanner.id!r} is unavailable — it may be "
+                    "offline, asleep, or disconnected. Check that it is powered "
+                    "on and reachable, then try again."
+                ) from exc
             raise ScanError(f"Failed to open scanner {scanner.id!r}: {exc}") from exc
 
         # Read device-level properties from root item
@@ -1296,31 +1314,35 @@ class WiaBackend:
 
             while True:
                 callback = _TransferCallback(options.progress, scanner._abort_event)
+                end_of_feeder = False
                 try:
                     transfer.Download(0, callback)
                 except Exception as exc:
+                    # Classify by HRESULT, never by message text.
                     hr = getattr(exc, "hresult", None)
-                    msg_text = str(exc).lower()
-                    if callback._aborted:
+                    if callback._aborted or hr in _WIA_CANCEL_ERRORS:
                         raise ScanAborted("Scan aborted") from exc
-                    if (
-                        hr == _WIA_ERROR_PAPER_EMPTY
-                        or "paper" in msg_text
-                        or "empty" in msg_text
-                    ):
+                    if hr in _WIA_BUSY_ERRORS:
+                        raise ScannerBusyError() from exc
+                    if hr in _WIA_UNAVAILABLE_ERRORS:
+                        raise ScannerUnavailableError() from exc
+                    if hr == _WIA_ERROR_PAPER_EMPTY:
+                        # Feeder ran dry: empty from the start if nothing was
+                        # scanned, otherwise the normal end of a feeder run.
                         if is_feeder and not all_pages and not callback.pages:
                             raise FeederEmptyError("No documents in feeder") from exc
-                        # Feeder empty after some pages — that's normal
-                    elif hr in _WIA_BUSY_ERRORS:
-                        raise ScannerBusyError() from exc
-                    elif "cancel" in msg_text or "abort" in msg_text:
-                        raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
-                    elif not callback.pages and not all_pages:
+                        end_of_feeder = True
+                    elif not all_pages and not callback.pages:
+                        # Unrecognised failure with nothing scanned — a real error.
                         raise ScanError(f"Scan failed: {exc}") from exc
+                    else:
+                        # Unrecognised error after pages on a feeder — stop the
+                        # run rather than risk looping on a repeating failure.
+                        end_of_feeder = True
 
                 all_pages.extend(callback.pages)
 
-                if not is_feeder:
+                if not is_feeder or end_of_feeder:
                     break
 
             if not all_pages:

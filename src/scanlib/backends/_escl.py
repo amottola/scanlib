@@ -31,10 +31,13 @@ from .._mdns import EsclServiceInfo, discover_escl_services, extract_ip_from_uri
 from .._types import (
     DISCOVERY_TIMEOUT,
     ColorMode,
+    FeederEmptyError,
     ScanAborted,
     ScanArea,
     ScanError,
+    ScanLibError,
     ScannerBusyError,
+    ScannerUnavailableError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -732,6 +735,17 @@ class EsclBackend:
 
         try:
             caps_xml = conn.get_capabilities()
+        except ScanLibError:
+            # Already a typed scanlib error (busy/unavailable/…) — preserve it.
+            raise
+        except OSError as exc:
+            # Socket-level failure: host unreachable, connection refused, or
+            # timed out — the scanner is offline, asleep, or disconnected.
+            raise ScannerUnavailableError(
+                f"Scanner at {conn.ip}:{conn.port} is unavailable — it may be "
+                "offline, asleep, or disconnected. Check that it is powered on "
+                "and reachable, then try again."
+            ) from exc
         except Exception as exc:
             raise ScanError(f"Failed to get scanner capabilities: {exc}") from exc
 
@@ -811,6 +825,14 @@ class EsclBackend:
 
                 if not is_feeder:
                     break  # flatbed: one page per job
+
+            if page_num == 0:
+                # A feeder job that produced nothing means the feeder was
+                # empty; a flatbed job with no data is a scan failure.  Match
+                # the SANE/macOS/WIA backends rather than yielding nothing.
+                if is_feeder:
+                    raise FeederEmptyError("No documents in feeder")
+                raise ScanError("Scan completed but no image data was received")
 
         except (ScanAborted, ScanError):
             conn.delete_job(job_path)

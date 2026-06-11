@@ -307,6 +307,11 @@ subclasses are:
      - The scanner is already in use by another session or application
        (most scanners — network ones especially — allow only one scan
        session at a time).  Subclass of :class:`ScanError`.
+   * - :class:`ScannerUnavailableError`
+     - The scanner could not be reached — offline, asleep, or
+       disconnected — rather than held by another session.  Often
+       transient (a network scanner that went to sleep) and worth
+       retrying once it is reachable.  Subclass of :class:`ScanError`.
    * - :class:`FeederEmptyError`
      - A feeder scan was requested but the document feeder is empty.
        Subclass of :class:`ScanError`.
@@ -327,14 +332,17 @@ subclasses are:
            doc = scanner.scan()
    except scanlib.ScannerBusyError:
        print("Scanner is busy — close any other scanning app and retry.")
+   except scanlib.ScannerUnavailableError:
+       print("Scanner is offline or asleep — check it's on and reachable.")
    except scanlib.ScanAborted:
        print("Scan was cancelled.")
    except scanlib.ScanLibError as exc:
        print(f"Scan failed: {exc}")
 
-Because :class:`ScannerBusyError` and :class:`FeederEmptyError` subclass
-:class:`ScanError`, existing ``except ScanError`` handlers keep working;
-catch them explicitly only when you want to react differently.
+Because :class:`ScannerBusyError`, :class:`ScannerUnavailableError`, and
+:class:`FeederEmptyError` subclass :class:`ScanError`, existing
+``except ScanError`` handlers keep working; catch them explicitly only when
+you want to react differently.
 
 Thread Safety
 -------------

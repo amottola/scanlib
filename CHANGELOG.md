@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.1
+
+### New features
+
+- **`ScannerUnavailableError`** — raised when a scanner can't be reached
+  (offline, asleep, or disconnected) rather than held by another session.
+  Subclass of `ScanError`, mapped from each backend's native unreachable signal.
+
+### Bug fixes
+
+- **Empty feeder and no-data scans now behave consistently across all
+  backends** — an empty feeder raises `FeederEmptyError`, a flatbed with no
+  data raises `ScanError`. eSCL previously yielded nothing (surfacing as a
+  confusing `ValueError` from `build_pdf`), and WIA could loop indefinitely.
+- **macOS feeder scans no longer fail at the end of the stack.** The
+  end-of-feeder signal after the last sheet was raised as an error, discarding
+  every page already scanned; it now ends the run normally.
+- **macOS network scanners show their Bonjour name without a redundant
+  location.** The Bonjour name, reported by ImageCaptureCore in
+  `locationDescription`, is now the display name with `location` left unset;
+  USB devices keep their bus descriptor ("USB").
+- **Scan errors are classified by status code, not message text** (ICReturn /
+  `SANE_Status` / WIA `HRESULT`) instead of locale-dependent substring matching.
+  This also corrects the macOS busy set, which listed the *cancel* code (−9924)
+  as in-use and omitted remote-in-use (−9926).
+
 ## 1.3.0
 
 ### New features

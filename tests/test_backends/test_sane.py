@@ -5,11 +5,13 @@ import pytest
 
 from scanlib._types import (
     ColorMode,
+    FeederEmptyError,
     ScanArea,
     ScanAborted,
     ScanError,
     Scanner,
     ScannerBusyError,
+    ScannerUnavailableError,
     ScanOptions,
     ScanSource,
     SourceInfo,
@@ -93,12 +95,19 @@ class TestCheckStatus:
         with pytest.raises(ScannerBusyError):
             _check_status(_STATUS_DEVICE_BUSY, "sane_open")
 
-    def test_other_error_raises_scan_error(self):
+    def test_io_error_raises_scanner_unavailable(self):
         from scanlib.backends._sane import _STATUS_IO_ERROR, _check_status
 
-        with pytest.raises(ScanError) as exc_info:
+        with pytest.raises(ScannerUnavailableError):
             _check_status(_STATUS_IO_ERROR, "sane_read")
+
+    def test_other_error_raises_plain_scan_error(self):
+        from scanlib.backends._sane import _STATUS_NO_MEM, _check_status
+
+        with pytest.raises(ScanError) as exc_info:
+            _check_status(_STATUS_NO_MEM, "sane_read")
         assert not isinstance(exc_info.value, ScannerBusyError)
+        assert not isinstance(exc_info.value, ScannerUnavailableError)
 
 
 class TestSaneBackend:
@@ -512,6 +521,40 @@ class TestSaneBackend:
 
         pages = list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER)))
         assert len(pages) == 1
+
+    def test_scan_pages_feeder_empty_raises_feeder_empty(self, mock_sane):
+        """Empty feeder: first sane_start returns NO_DOCS -> FeederEmptyError."""
+        mock_dev = _make_mock_dev()
+        mock_dev.start.side_effect = [7]  # NO_DOCS on the very first page
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
+
+        with pytest.raises(FeederEmptyError):
+            list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER)))
+
+    def test_scan_pages_flatbed_no_data_raises_scan_error(self, mock_sane):
+        """Flatbed with no image data is a scan error, not FeederEmptyError."""
+        from scanlib.backends._sane import Parameters
+
+        mock_dev = _make_mock_dev()
+        mock_dev.start.return_value = 0  # GOOD
+        mock_dev.get_parameters.return_value = Parameters(
+            format=0,
+            last_frame=True,
+            bytes_per_line=50,
+            pixels_per_line=50,
+            lines=50,
+            depth=8,
+        )
+        mock_dev.read.side_effect = [(b"", 5)]  # immediate EOF, no data
+
+        backend = _make_backend()
+        scanner = _open_scanner(backend, mock_sane, mock_dev)
+
+        with pytest.raises(ScanError) as exc_info:
+            list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FLATBED)))
+        assert not isinstance(exc_info.value, FeederEmptyError)
 
     def test_scan_pages_rgb_returns_raw(self, mock_sane):
         """RGB scan returns raw pixel data with color_type=2."""

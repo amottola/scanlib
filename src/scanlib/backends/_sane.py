@@ -20,7 +20,9 @@ from .._types import (
     ScanArea,
     ScanAborted,
     ScanError,
+    ScanLibError,
     ScannerBusyError,
+    ScannerUnavailableError,
     ScannedPage,
     Scanner,
     ScannerDefaults,
@@ -219,15 +221,36 @@ if _lib is not None:
 # ---------------------------------------------------------------------------
 
 
+def _status_error(status: int, context: str = "") -> ScanError:
+    """Build a :class:`ScanError` for *status*, tagged with ``.sane_status``.
+
+    Callers classify the failure by the numeric ``SANE_Status`` code on the
+    exception rather than by parsing the message text.
+    """
+    name = _STATUS_NAMES.get(status, f"unknown ({status})")
+    msg = f"SANE error: {name}"
+    if context:
+        msg = f"{context}: {msg}"
+    err = ScanError(msg)
+    err.sane_status = status
+    return err
+
+
 def _check_status(status: int, context: str = "") -> None:
     if status != _STATUS_GOOD:
-        name = _STATUS_NAMES.get(status, f"unknown ({status})")
-        msg = f"SANE error: {name}"
-        if context:
-            msg = f"{context}: {msg}"
         if status == _STATUS_DEVICE_BUSY:
             raise ScannerBusyError()
-        raise ScanError(msg)
+        if status == _STATUS_IO_ERROR:
+            # I/O error means communication with the device failed — it is
+            # offline, asleep, or disconnected, not held by another session.
+            name = _STATUS_NAMES.get(status, f"unknown ({status})")
+            msg = f"SANE error: {name}"
+            if context:
+                msg = f"{context}: {msg}"
+            raise ScannerUnavailableError(
+                f"{msg} — the scanner may be offline, asleep, or disconnected."
+            )
+        raise _status_error(status, context)
 
 
 def _ensure_lib() -> None:
@@ -723,8 +746,7 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
     if status != _STATUS_GOOD:
         if status == _STATUS_DEVICE_BUSY:
             raise ScannerBusyError()
-        name = _STATUS_NAMES.get(status, f"unknown ({status})")
-        raise ScanError(f"sane_start: {name}")
+        raise _status_error(status, "sane_start")
 
     params = dev.get_parameters()
     width = params.pixels_per_line
@@ -752,8 +774,7 @@ def _scan_one_page(dev: _SaneDevice, progress=None) -> ScannedPage:
             # instead of EOF once all data has been delivered.
             break
         if st != _STATUS_GOOD:
-            name = _STATUS_NAMES.get(st, f"unknown ({st})")
-            raise ScanError(f"sane_read: {name}")
+            raise _status_error(st, "sane_read")
 
     raw = b"".join(chunks)
 
@@ -872,6 +893,9 @@ class SaneBackend:
     def open_scanner(self, scanner: Scanner) -> None:
         try:
             dev = _open_device(scanner.name)
+        except ScanLibError:
+            # Already a typed scanlib error (busy/unavailable/…) — preserve it.
+            raise
         except Exception as exc:
             raise ScanError(f"Failed to open scanner {scanner.name!r}: {exc}") from exc
         self._handles[scanner.name] = dev
@@ -983,10 +1007,11 @@ class SaneBackend:
                     scan_started = True
                     page = _scan_one_page(dev, progress=options.progress)
                 except ScanError as exc:
-                    msg = str(exc).lower()
-                    if is_feeder and ("no docs" in msg or "eof" in msg):
+                    status = getattr(exc, "sane_status", None)
+                    # End of an automatic feeder run: no more documents / EOF.
+                    if is_feeder and status in (_STATUS_NO_DOCS, _STATUS_EOF):
                         break
-                    if "cancel" in msg or "jammed" in msg:
+                    if status in (_STATUS_CANCELLED, _STATUS_JAMMED):
                         raise ScanAborted(f"Scan cancelled by device: {exc}") from exc
                     raise
 
