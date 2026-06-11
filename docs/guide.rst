@@ -284,7 +284,7 @@ indicates which backend discovered it:
      - macOS ImageCaptureCore
      - ICC UUID
    * - ``"wia"``
-     - Windows WIA 2.0 (USB)
+     - Windows WIA 2.0 (USB + network)
      - WIA device ID
    * - ``"escl"``
      - eSCL / AirScan (network)

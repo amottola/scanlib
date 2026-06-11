@@ -48,7 +48,7 @@ Backends
      - None
    * - **Windows 10+**
      - WIA 2.0 (`comtypes <https://github.com/enthought/comtypes>`_)
-     - USB only
+     - USB + network
      - WIC
      - None
    * - **Linux**
