@@ -76,15 +76,18 @@ class TestScanner:
         )
         assert str(s) == "Epson GT-S50"
 
-    def test_str_vendor_only(self):
+    def test_str_prefers_name_over_lone_vendor(self):
+        # Only a vendor (no model) — the full name is more descriptive than
+        # a bare brand, so it wins.  This is the macOS case (manufacturer
+        # set, model None).
         s = Scanner(
             name="Canon ImageRUNNER", vendor="Canon", model=None, backend="imagecapture"
         )
-        assert str(s) == "Canon"
+        assert str(s) == "Canon ImageRUNNER"
 
-    def test_str_model_only(self):
+    def test_str_prefers_name_over_lone_model(self):
         s = Scanner(name="test:dev", vendor=None, model="GT-S50", backend="sane")
-        assert str(s) == "GT-S50"
+        assert str(s) == "test:dev"
 
     def test_str_fallback_to_name(self):
         s = Scanner(name="HP Officejet", vendor=None, model=None, backend="wia")

@@ -627,6 +627,13 @@ class MacOSBackend:
                 if uid not in self._devices:
                     self._devices[uid] = dev
 
+            def _location(dev):
+                # ImageCaptureCore echoes the device name as the location
+                # description when no real location is set — treat that as
+                # "no location" rather than surfacing a redundant string.
+                loc = _safe_str(dev, "locationDescription")
+                return loc if loc and loc != dev.name() else None
+
             return [
                 Scanner(
                     name=dev.name(),
@@ -635,7 +642,7 @@ class MacOSBackend:
                     backend=self.backend_name,
                     scanner_id=_safe_str(dev, "UUIDString") or dev.name(),
                     uuid=_safe_str(dev, "UUIDString") or None,
-                    location=_safe_str(dev, "locationDescription"),
+                    location=_location(dev),
                 )
                 for dev in delegate.scanners
             ]

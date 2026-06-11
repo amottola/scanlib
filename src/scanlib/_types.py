@@ -335,7 +335,10 @@ class Scanner:
             return self._location
         if self._vendor and self._model:
             return f"{self._vendor} {self._model}"
-        return self._vendor or self._model or self._name
+        # Prefer the (always-populated, usually most descriptive) name over
+        # a lone brand: on macOS the device reports a manufacturer but no
+        # model, so a bare vendor would otherwise win over the full name.
+        return self._name or self._vendor or self._model
 
     @property
     def vendor(self) -> str | None:

@@ -46,6 +46,11 @@
   network scanners (which the eSCL backend handles).  This also silences
   the HTTP 404 messages those backends printed to stdout/stderr during
   discovery.
+- **macOS no longer reports a redundant location.**  When ImageCaptureCore
+  echoes the device name as its `locationDescription` (its behaviour when
+  no real location is set), `Scanner.location` is now `None`.  `str(scanner)`
+  also prefers the full device name over a bare manufacturer, so the
+  display label is unchanged in that case.
 
 ### Bug fixes
 
