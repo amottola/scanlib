@@ -72,9 +72,7 @@ class TestCreateJobBusy:
 class TestOpenUnavailable:
     def test_connection_failure_raises_scanner_unavailable(self, monkeypatch):
         backend = EsclBackend()
-        scanner = Scanner(
-            "Scanner", None, None, "escl", scanner_id="escl:1.2.3.4:80"
-        )
+        scanner = Scanner("Scanner", None, None, "escl", scanner_id="escl:1.2.3.4:80")
         conn = _EsclConnection("1.2.3.4", 80, tls=False, resource_path="eSCL")
 
         def _refuse():
@@ -94,12 +92,18 @@ class _FakeScanConn:
     hands them out in order, then returns None (HTTP 404 -> no more pages).
     """
 
-    def __init__(self, docs):
+    def __init__(self, docs, adf_state=None):
         self._docs = list(docs)
         self._current_job = None
         self.deleted = False
+        self.job_created = False
+        self._adf_state = adf_state
+
+    def get_adf_state(self):
+        return self._adf_state
 
     def create_job(self, settings_xml, **kwargs):
+        self.job_created = True
         self._current_job = "/eSCL/ScanJobs/1"
         return self._current_job
 
@@ -129,6 +133,20 @@ class TestScanPagesMatrix:
     def test_feeder_empty_raises_feeder_empty(self, monkeypatch):
         with pytest.raises(FeederEmptyError):
             self._run(monkeypatch, [], ScanSource.FEEDER)
+
+    def test_feeder_empty_adf_skips_job(self, monkeypatch):
+        # When the scanner reports an empty ADF, no scan job is created —
+        # otherwise the scanner physically engages the feeder for nothing.
+        from scanlib.backends import _escl
+
+        monkeypatch.setattr(_escl, "_decode_scan_response", lambda data, ct: object())
+        backend = EsclBackend()
+        scanner = Scanner("S", None, None, "escl", scanner_id="escl:1.2.3.4:80")
+        conn = _FakeScanConn([(b"a", "image/jpeg")], adf_state="ScannerAdfEmpty")
+        backend._connections[scanner.id] = conn
+        with pytest.raises(FeederEmptyError):
+            list(backend.scan_pages(scanner, ScanOptions(source=ScanSource.FEEDER)))
+        assert not conn.job_created
 
     def test_flatbed_with_page(self, monkeypatch):
         pages = self._run(monkeypatch, [(b"a", "image/jpeg")], ScanSource.FLATBED)

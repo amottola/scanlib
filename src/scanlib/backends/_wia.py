@@ -116,6 +116,13 @@ _FEEDER = 2
 
 _WIA_FORMAT_BMP = GUID("{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}")
 
+# WIA item categories (wiadef.h).  A WIA 2.0 scanner exposes one child
+# item per source; scanning the *wrong* item (e.g. the flatbed item with
+# the feeder selected) makes some drivers scan blank pages from an empty
+# feeder forever instead of reporting WIA_ERROR_PAPER_EMPTY.
+_WIA_CATEGORY_FLATBED = GUID("{FB607B1F-43F3-488B-855B-FB703EC342A6}")
+_WIA_CATEGORY_FEEDER = GUID("{FE131934-F84C-42AD-8DA4-6129CDDD7288}")
+
 _WIA_ERROR_PAPER_EMPTY = -2145320957  # 0x80210003
 # HRESULTs that mean the device is in use / unavailable to this session.
 _WIA_ERROR_BUSY = -2145320954  # 0x80210006
@@ -791,6 +798,42 @@ def _read_wia_color_modes(storage) -> list[ColorMode]:
     return []
 
 
+def _enum_scan_items(root_item):
+    """Map scan sources to their dedicated WIA child items.
+
+    Returns ``(child_map, default_child)`` where *child_map* maps
+    :class:`ScanSource` to the child item whose WIA category matches that
+    source, and *default_child* is the first child item (a fallback for
+    scanners that expose a single generic item).  Scanning a source through
+    its own child item is what makes the driver report
+    ``WIA_ERROR_PAPER_EMPTY`` for an empty feeder instead of scanning blanks.
+    """
+    child_map: dict[ScanSource, object] = {}
+    default_child = None
+    try:
+        enum_items = root_item.EnumChildItems(None)
+    except Exception:
+        return child_map, default_child
+    while True:
+        try:
+            child, fetched = enum_items.Next(1)
+        except Exception:
+            break
+        if not fetched:
+            break
+        if default_child is None:
+            default_child = child
+        try:
+            category = child.GetItemCategory()
+        except Exception:
+            continue
+        if category == _WIA_CATEGORY_FEEDER:
+            child_map[ScanSource.FEEDER] = child
+        elif category == _WIA_CATEGORY_FLATBED:
+            child_map[ScanSource.FLATBED] = child
+    return child_map, default_child
+
+
 def _read_wia_sources(storage) -> list[ScanSource]:
     """Determine available scan sources from device capabilities."""
     caps = _read_prop(storage, _WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, 0)
@@ -1183,46 +1226,31 @@ class WiaBackend:
         if not source_types:
             source_types = [ScanSource.FLATBED]
 
-        # Get first child item for item-level properties
-        child_item = None
-        try:
-            enum_items = root_item.EnumChildItems(None)
-            child, fetched = enum_items.Next(1)
-            if fetched:
-                child_item = child
-        except Exception:
-            pass
+        # Map each source to its dedicated child item (Flatbed/Feeder),
+        # falling back to the first item for single-item scanners.
+        child_map, default_child = _enum_scan_items(root_item)
 
         source_infos: list[SourceInfo] = []
-        if child_item is not None:
+        if default_child is not None:
             try:
-                item_storage = child_item.QueryInterface(IWiaPropertyStorage)
-                device_area = _read_wia_max_scan_area(root_storage, item_storage)
-
-                # Read per-source resolutions and color modes.
+                # Read each source's resolutions/color modes from its own
+                # child item (the feeder may differ from the flatbed).
                 for source in source_types:
-                    if root_storage is not None:
-                        try:
-                            select_val = (
-                                _FEEDER if source == ScanSource.FEEDER else _FLATBED
-                            )
-                            _write_prop(
-                                root_storage,
-                                _WIA_DPS_DOCUMENT_HANDLING_SELECT,
-                                select_val,
-                            )
-                        except Exception:
-                            pass
+                    src_item = child_map.get(source, default_child)
+                    item_storage = src_item.QueryInterface(IWiaPropertyStorage)
                     source_infos.append(
                         SourceInfo(
                             type=source,
                             resolutions=_read_wia_resolutions(item_storage),
                             color_modes=_read_wia_color_modes(item_storage),
-                            max_scan_area=device_area,
+                            max_scan_area=_read_wia_max_scan_area(
+                                root_storage, item_storage
+                            ),
                         )
                     )
 
-                scanner._defaults = _read_wia_defaults(item_storage, source_types)
+                default_storage = default_child.QueryInterface(IWiaPropertyStorage)
+                scanner._defaults = _read_wia_defaults(default_storage, source_types)
             except Exception:
                 scanner._defaults = None
         else:
@@ -1240,7 +1268,7 @@ class WiaBackend:
             scanner._defaults = None
 
         scanner._sources = source_infos
-        self._handles[scanner.id] = (root_item, child_item)
+        self._handles[scanner.id] = (root_item, child_map, default_child)
 
     def _close_scanner_impl(self, scanner: Scanner) -> None:
         self._handles.pop(scanner.id, None)
@@ -1252,7 +1280,11 @@ class WiaBackend:
         if items is None:
             raise ScanError("Scanner is not open")
 
-        root_item, child_item = items
+        root_item, child_map, default_child = items
+        source = options.source or ScanSource.FLATBED
+        # Scan from the source's own child item — using the flatbed item for
+        # a feeder scan makes some drivers scan blanks from an empty feeder.
+        child_item = child_map.get(source, default_child)
         if child_item is None:
             raise ScanError("Scanner has no scan items")
 
@@ -1344,8 +1376,17 @@ class WiaBackend:
 
                 if not is_feeder or end_of_feeder:
                     break
+                if not callback.pages:
+                    # Feeder Download returned successfully but produced no
+                    # page and didn't raise WIA_ERROR_PAPER_EMPTY — some
+                    # scanners (e.g. Epson WSD) signal an empty feeder this
+                    # way.  Stop instead of calling Download again, which
+                    # would re-run the scanner on an empty feeder forever.
+                    break
 
             if not all_pages:
+                if is_feeder:
+                    raise FeederEmptyError("No documents in feeder")
                 raise ScanError("No pages were scanned")
 
             check_progress(options.progress, 100)

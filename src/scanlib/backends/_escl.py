@@ -159,6 +159,26 @@ class _EsclConnection:
             state_el = root.find(_ns(_SCAN_NS, "State"))
         return state_el.text if state_el is not None and state_el.text else "Unknown"
 
+    def get_adf_state(self) -> str | None:
+        """Return the feeder (ADF) state from ScannerStatus, or ``None``.
+
+        eSCL reports ``<scan:AdfState>`` as e.g. ``ScannerAdfProcessing``,
+        ``ScannerAdfLoaded``, or ``ScannerAdfEmpty``.  Returns ``None`` when
+        the scanner doesn't report it (best-effort — not all models do).
+        """
+        conn = self._connect()
+        conn.request("GET", f"{self.base_path}/ScannerStatus")
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status != 200:
+            return None
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError:
+            return None
+        el = next(root.iter(_ns(_SCAN_NS, "AdfState")), None)
+        return el.text.strip() if el is not None and el.text else None
+
     def cancel_active_jobs(self) -> int:
         """Cancel any active jobs on the scanner. Returns count cancelled."""
         conn = self._connect()
@@ -779,6 +799,16 @@ class EsclBackend:
         settings_xml = _build_scan_settings(options, escl_source, max_area)
 
         check_progress(options.progress, 0)
+
+        # For the feeder, check the ADF state before creating a job.  A
+        # scanner asked to scan from an empty feeder would otherwise
+        # physically engage the ADF and, on some models, keep producing
+        # (blank) pages instead of cleanly reporting "no documents".  This
+        # is best-effort: only an explicit "empty" report short-circuits;
+        # scanners that don't report AdfState fall through to the job (and
+        # the page_num == 0 check below still catches an empty feeder).
+        if is_feeder and conn.get_adf_state() == "ScannerAdfEmpty":
+            raise FeederEmptyError("No documents in feeder")
 
         try:
             job_path = conn.create_job(settings_xml)

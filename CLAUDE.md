@@ -114,11 +114,13 @@ The WIA backend uses the WIA 2.0 low-level COM interfaces (`IWiaTransfer` + `IWi
 Key interfaces:
 - **`IWiaDevMgr2`** — device enumeration (`EnumDeviceInfo`) and connection (`CreateDevice`)
 - **`IWiaPropertyStorage`** — property access via `ReadMultiple`/`WriteMultiple`/`GetPropertyAttributes` with `PROPSPEC`/`PROPVARIANT` ctypes structures
-- **`IWiaItem2`** — represents device/scan items; `EnumChildItems` to get scannable items
+- **`IWiaItem2`** — represents device/scan items; `EnumChildItems` to get scannable items, `GetItemCategory` to identify each (Flatbed vs Feeder vs Auto)
 - **`IWiaTransfer`** — `Download()` initiates a blocking scan that invokes callbacks
 - **`IWiaTransferCallback`** — implemented as a `comtypes.COMObject`; `TransferCallback` receives progress (`lPercentComplete` 0-100), `GetNextStream` is called once per page to provide a memory-backed `IStream` (via `CreateStreamOnHGlobal`)
 
 Transfer flow: `Download()` blocks while invoking `GetNextStream` (once per page) and `TransferCallback` (progress + end-of-stream signals). On `END_OF_STREAM`, the BMP data is read from the `IStream` via `GetHGlobalFromStream` and converted to raw pixels using `_bmp_to_raw` from the C accelerator extension. BMP format is used for maximum device compatibility.
+
+Each scan source is scanned through its **own** child item, not a single item with `WIA_DPS_DOCUMENT_HANDLING_SELECT` flipped. `_enum_scan_items` maps `ScanSource` → child item by `GetItemCategory` (`_WIA_CATEGORY_FLATBED`/`_WIA_CATEGORY_FEEDER`), and `_handles` stores `(root_item, child_map, default_child)`. This matters for empty-feeder detection: scanning the feeder through the flatbed item makes some drivers (e.g. Epson WSD) scan blank pages forever, whereas the dedicated feeder item raises `WIA_ERROR_PAPER_EMPTY` immediately (mapped to `FeederEmptyError`). The select property is still written for single-item scanners that lack per-source children (`child_map` empty → `default_child`).
 
 Max scan area is determined via a 4-level fallback chain in `_read_wia_max_scan_area`: (1) WIA 2.0 item-level `WIA_IPS_MAX_HORIZONTAL/VERTICAL_SIZE`, (2) WIA 1.0 device-level `WIA_DPS_MAX_HORIZONTAL/VERTICAL_SIZE`, (3) derived from `XEXTENT`/`YEXTENT` property range max + current resolution, (4) fallback to the bounding box of US Letter and A4 (2159 x 2970 in 1/10 mm). This ensures `max_scan_area` is always populated.
 
@@ -134,7 +136,7 @@ The eSCL backend (`backends/_escl.py`) communicates directly with network scanne
 
 **Capabilities**: `GET /<rs>/ScannerCapabilities` returns XML with `<scan:Platen>` and `<scan:Adf>` elements. The parser extracts discrete resolutions or normalizes resolution ranges, color modes (`BlackAndWhite1`/`Grayscale8`/`RGB24`), and max scan area. All eSCL units are 1/300 inch; conversion to scanlib's 1/10 mm: `tenths_mm = round(escl * 254 / 300)`.
 
-**Scanning**: `POST /<rs>/ScanJobs` with XML settings creates a job (201 + Location header). `GET <job>/NextDocument` retrieves pages as JPEG. For feeder scanning, NextDocument is called in a loop until 404 (no more pages). For flatbed, one page per job. Abort sends `DELETE <job>`.
+**Scanning**: `POST /<rs>/ScanJobs` with XML settings creates a job (201 + Location header). `GET <job>/NextDocument` retrieves pages as JPEG. For feeder scanning, NextDocument is called in a loop until 404 (no more pages). For flatbed, one page per job. Abort sends `DELETE <job>`. Before creating a feeder job the backend reads `<scan:AdfState>` from `ScannerStatus` (`get_adf_state`) and raises `FeederEmptyError` if it is `ScannerAdfEmpty` — otherwise the scanner physically engages the (empty) ADF and some models keep producing blank pages instead of cleanly signalling end-of-feed. This is best-effort: scanners that don't report `AdfState` fall through to the job, where a zero-page result still raises `FeederEmptyError`.
 
 **Image decoding**: Scanner JPEG responses are decoded to raw pixels using `decode_jpeg()` from `_jpeg.py` (platform-native: ImageIO on macOS, WIC on Windows, libjpeg on Linux). If BW mode was requested, the decoded grayscale is converted to 1-bit packed using `gray_to_bw` from the C extension.
 

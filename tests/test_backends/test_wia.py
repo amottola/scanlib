@@ -65,7 +65,7 @@ def _make_open_scanner_dm():
     dm.CreateDevice.return_value = root_item
     child_item = mock.MagicMock()
     enum_items = mock.MagicMock()
-    enum_items.Next.return_value = (child_item, 1)
+    enum_items.Next.side_effect = [(child_item, 1), (None, 0)]
     root_item.EnumChildItems.return_value = enum_items
     return dm
 
@@ -214,6 +214,79 @@ class TestWiaBackend:
 
         with pytest.raises(ScanError, match="not open"):
             list(backend.scan_pages(scanners[0], ScanOptions()))
+
+
+class TestScanPagesFeederEmpty:
+    """The feeder loop must terminate when the feeder is empty."""
+
+    @staticmethod
+    def _item_with_transfer(transfer):
+        from scanlib.backends._wia import IWiaTransfer
+
+        item = mock.MagicMock()
+        item.QueryInterface.side_effect = lambda iface: (
+            transfer if iface is IWiaTransfer else mock.MagicMock()
+        )
+        return item
+
+    def test_feeder_scan_uses_feeder_item_and_reports_empty(self, monkeypatch):
+        # The feeder scan must run through the FEEDER child item (not the
+        # flatbed one); an empty feeder raises WIA_ERROR_PAPER_EMPTY there,
+        # which maps to FeederEmptyError.
+        from scanlib._types import FeederEmptyError, Scanner
+        from scanlib.backends import _wia
+        from scanlib.backends._wia import _WIA_ERROR_PAPER_EMPTY
+
+        backend = _wia.WiaBackend()
+        scanner = Scanner("S", None, None, "wia", scanner_id="dev0")
+
+        flatbed_transfer = mock.MagicMock()
+        feeder_transfer = mock.MagicMock()
+        paper_empty = Exception("paper empty")
+        paper_empty.hresult = _WIA_ERROR_PAPER_EMPTY
+        feeder_transfer.Download.side_effect = paper_empty
+
+        flatbed_item = self._item_with_transfer(flatbed_transfer)
+        feeder_item = self._item_with_transfer(feeder_transfer)
+        child_map = {ScanSource.FLATBED: flatbed_item, ScanSource.FEEDER: feeder_item}
+        backend._handles = {scanner.id: (mock.MagicMock(), child_map, flatbed_item)}
+
+        fake_cb = mock.MagicMock(pages=[], _aborted=False)
+        monkeypatch.setattr(_wia, "_TransferCallback", lambda *a, **k: fake_cb)
+
+        with pytest.raises(FeederEmptyError):
+            backend._scan_pages_impl(scanner, ScanOptions(source=ScanSource.FEEDER))
+
+        assert feeder_transfer.Download.call_count == 1
+        assert flatbed_transfer.Download.call_count == 0  # never touched the flatbed
+
+    def test_empty_feeder_zero_pages_stops_and_raises(self, monkeypatch):
+        # Defensive: a driver whose feeder Download succeeds with no page and
+        # no PAPER_EMPTY must still stop (not loop forever) and raise.
+        from scanlib._types import FeederEmptyError, Scanner
+        from scanlib.backends import _wia
+
+        backend = _wia.WiaBackend()
+        scanner = Scanner("S", None, None, "wia", scanner_id="dev0")
+
+        transfer = mock.MagicMock()  # Download returns normally, no pages
+        feeder_item = self._item_with_transfer(transfer)
+        backend._handles = {
+            scanner.id: (
+                mock.MagicMock(),
+                {ScanSource.FEEDER: feeder_item},
+                feeder_item,
+            )
+        }
+
+        fake_cb = mock.MagicMock(pages=[], _aborted=False)
+        monkeypatch.setattr(_wia, "_TransferCallback", lambda *a, **k: fake_cb)
+
+        with pytest.raises(FeederEmptyError):
+            backend._scan_pages_impl(scanner, ScanOptions(source=ScanSource.FEEDER))
+
+        # Must not loop forever re-running the scanner on an empty feeder.
+        assert transfer.Download.call_count == 1
 
 
 class TestReadWiaMaxScanArea:

@@ -10,10 +10,14 @@
 
 ### Bug fixes
 
-- **Empty feeder and no-data scans now behave consistently across all
-  backends** — an empty feeder raises `FeederEmptyError`, a flatbed with no
-  data raises `ScanError`. eSCL previously yielded nothing (surfacing as a
-  confusing `ValueError` from `build_pdf`), and WIA could loop indefinitely.
+- **Empty-feeder scans now stop cleanly on every backend** — an empty feeder
+  raises `FeederEmptyError` (a flatbed with no data raises `ScanError`),
+  instead of the previous backend-specific failures: eSCL yielded nothing
+  (a confusing `ValueError` from `build_pdf`) and now checks the ADF state
+  (`ScannerStatus`) before creating a job; WIA scanned blank pages from an
+  empty feeder forever (some drivers, e.g. Epson WSD) and now scans each
+  source through its own WIA child item, so the feeder reports
+  `WIA_ERROR_PAPER_EMPTY` immediately rather than running the scanner.
 - **macOS feeder scans no longer fail at the end of the stack.** The
   end-of-feeder signal after the last sheet was raised as an error, discarding
   every page already scanned; it now ends the run normally.
