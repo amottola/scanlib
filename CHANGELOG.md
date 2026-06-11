@@ -66,6 +66,12 @@
 
 ### Bug fixes
 
+- **eSCL discovery no longer misreports non-scanner devices (iPhones,
+  Macs, VMs) as scanners.**  The mDNS browser binds the multicast port and
+  so also receives unsolicited announcements for unrelated services on the
+  LAN (screen sharing on `_rfb._tcp`, AirPlay, `_companion-link`, …); the
+  PTR parser accepted all of them.  It now keeps only PTR records for the
+  `_uscan._tcp`/`_uscans._tcp` service types actually queried.
 - eSCL discovery no longer reports unusable, duplicate entries for
   scanners that advertise a link-local (`fe80::…`) address — link-local
   addresses are not connectable without a zone scope, so they are skipped

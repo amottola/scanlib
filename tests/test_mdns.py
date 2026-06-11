@@ -158,6 +158,22 @@ class TestParseResponses:
         ptrs, txts, addrs, srvs = _parse_responses(data)
         assert ("_uscan._tcp.local.", target_name) in ptrs
 
+    def test_ptr_record_ignores_unrelated_service_types(self):
+        # We receive unsolicited mDNS announcements for other services on
+        # the LAN (e.g. screen sharing on _rfb._tcp from iPhones/Macs);
+        # those PTRs must not be treated as scanners.
+        scanner = _encode_name("Canon._uscan._tcp.local.")
+        vnc = _encode_name("Mac Mini._rfb._tcp.local.")
+        data = self._build_response(
+            [
+                ("_uscan._tcp.local.", 12, scanner),
+                ("_rfb._tcp.local.", 12, vnc),
+            ]
+        )
+        ptrs, txts, addrs, srvs = _parse_responses(data)
+        types = {svc for svc, _inst in ptrs}
+        assert types == {"_uscan._tcp.local."}
+
     def test_txt_record(self):
         s1 = b"note=Office"
         s2 = b"ty=Canon MF240"

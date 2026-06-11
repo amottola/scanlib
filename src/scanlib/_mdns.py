@@ -33,6 +33,8 @@ _SERVICE_TYPES = (
     "_uscan._tcp.local.",
     "_uscans._tcp.local.",
 )
+# Normalized (no trailing dot, lower-case) set for matching PTR owner names.
+_SERVICE_TYPE_SET = frozenset(s.rstrip(".").lower() for s in _SERVICE_TYPES)
 
 
 @dataclasses.dataclass
@@ -189,8 +191,15 @@ def _parse_responses(
         offset += rdlength
 
         if rtype == _TYPE_PTR:
-            target, _ = _read_name(data, rdstart)
-            ptrs.append((name, target))
+            # Only accept PTRs for the scanner service types we queried.
+            # We bind the mDNS port and join the multicast group, so the
+            # socket also receives unrelated service announcements from
+            # other devices on the LAN (AirPlay, screen sharing on
+            # _rfb._tcp, _companion-link, …); without this filter those
+            # iPhones/Macs/VMs get misreported as scanners.
+            if name.rstrip(".").lower() in _SERVICE_TYPE_SET:
+                target, _ = _read_name(data, rdstart)
+                ptrs.append((name, target))
         elif rtype == _TYPE_TXT:
             txts[name] = _parse_txt(data, rdstart, rdlength)
         elif rtype == _TYPE_A and rdlength == 4:
