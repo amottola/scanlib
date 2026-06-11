@@ -83,7 +83,6 @@ from .._types import (
 _WIA_DIP_DEV_ID = 2
 _WIA_DIP_DEV_NAME = 7
 _WIA_DIP_DEV_TYPE = 5
-_WIA_DIP_VEND_DESC = 3
 _WIA_DIP_PORT_NAME = 6
 _WIA_DIP_PNP_ID = 16
 
@@ -537,6 +536,112 @@ if _HAS_WIN32:
     _kernel32.GlobalLock.restype = c_void_p
     _kernel32.GlobalLock.argtypes = [c_void_p]
     _kernel32.GlobalUnlock.argtypes = [c_void_p]
+
+
+# ---------------------------------------------------------------------------
+# PnP property store (cfgmgr32) — real manufacturer / model
+#
+# WIA only exposes the *driver* vendor (e.g. "Microsoft" for the generic WSD
+# driver), not the hardware maker.  The real manufacturer and model live in
+# the Windows PnP property store under DEVPKEY_Device_Manufacturer/Model.
+# WIA_DIP_PNP_ID is the device interface path, which resolves to the device
+# instance id (CM_Get_Device_Interface_PropertyW handles the path→id
+# separator quirks), then to a devnode whose properties we read.
+# ---------------------------------------------------------------------------
+
+if _HAS_WIN32:
+
+    class _DEVPROPKEY(Structure):
+        _fields_ = [("fmtid", GUID), ("pid", c_ulong)]
+
+    def _devpropkey(guid: str, pid: int) -> "_DEVPROPKEY":
+        return _DEVPROPKEY(GUID(guid), c_ulong(pid))
+
+    # devpkey.h
+    _DEVPKEY_Device_InstanceId = _devpropkey(
+        "{78C34FC8-104A-4ACA-9EA4-524D52996E57}", 256
+    )
+    _DEVPKEY_Device_Manufacturer = _devpropkey(
+        "{A45C254E-DF1C-4EFD-8020-67D146A850E0}", 13
+    )
+    _DEVPKEY_Device_Model = _devpropkey("{78C34FC8-104A-4ACA-9EA4-524D52996E57}", 39)
+
+    _cfgmgr32 = ctypes.windll.cfgmgr32
+    _DEVINST = wt.DWORD
+    _PKEY_P = ctypes.POINTER(_DEVPROPKEY)
+    _ULONG_P = ctypes.POINTER(c_ulong)
+    _cfgmgr32.CM_Get_Device_Interface_PropertyW.restype = c_ulong
+    _cfgmgr32.CM_Get_Device_Interface_PropertyW.argtypes = [
+        wt.LPCWSTR,
+        _PKEY_P,
+        _ULONG_P,
+        c_void_p,
+        _ULONG_P,
+        c_ulong,
+    ]
+    _cfgmgr32.CM_Locate_DevNodeW.restype = c_ulong
+    _cfgmgr32.CM_Locate_DevNodeW.argtypes = [
+        ctypes.POINTER(_DEVINST),
+        wt.LPCWSTR,
+        c_ulong,
+    ]
+    _cfgmgr32.CM_Get_DevNode_PropertyW.restype = c_ulong
+    _cfgmgr32.CM_Get_DevNode_PropertyW.argtypes = [
+        _DEVINST,
+        _PKEY_P,
+        _ULONG_P,
+        c_void_p,
+        _ULONG_P,
+        c_ulong,
+    ]
+
+    def _cm_string(read, key: "_DEVPROPKEY") -> str | None:
+        """Two-call (size then data) read of a string DEVPKEY; None on miss."""
+        size = c_ulong(0)
+        ptype = c_ulong(0)
+        read(byref(key), byref(ptype), None, byref(size))
+        if size.value == 0:
+            return None
+        buf = ctypes.create_unicode_buffer(size.value // 2)
+        if read(byref(key), byref(ptype), ctypes.cast(buf, c_void_p), byref(size)):
+            return None  # non-zero CONFIGRET == failure
+        return buf.value or None
+
+    def _read_pnp_vendor_model(pnp_path: str) -> tuple[str | None, str | None]:
+        """Return (manufacturer, model) from the PnP store, or (None, None).
+
+        *pnp_path* is the device interface path from WIA_DIP_PNP_ID.  Any
+        failure (USB scanners lacking these props, access errors, an
+        unexpected path) degrades silently to (None, None).
+        """
+        if not pnp_path:
+            return (None, None)
+        try:
+            instance_id = _cm_string(
+                lambda *a: _cfgmgr32.CM_Get_Device_Interface_PropertyW(pnp_path, *a, 0),
+                _DEVPKEY_Device_InstanceId,
+            )
+            if not instance_id:
+                return (None, None)
+            devinst = _DEVINST(0)
+            if _cfgmgr32.CM_Locate_DevNodeW(byref(devinst), instance_id, 0):
+                return (None, None)
+            vendor = _cm_string(
+                lambda *a: _cfgmgr32.CM_Get_DevNode_PropertyW(devinst, *a, 0),
+                _DEVPKEY_Device_Manufacturer,
+            )
+            model = _cm_string(
+                lambda *a: _cfgmgr32.CM_Get_DevNode_PropertyW(devinst, *a, 0),
+                _DEVPKEY_Device_Model,
+            )
+            return (vendor, model)
+        except Exception:
+            return (None, None)
+
+else:
+
+    def _read_pnp_vendor_model(pnp_path: str) -> tuple[str | None, str | None]:
+        return (None, None)
 
 
 def _make_propspec(prop_id: int) -> _PROPSPEC:
@@ -1018,13 +1123,17 @@ class WiaBackend:
             # PnP id that matches the eSCL mDNS UUID — expose it so the
             # composite backend can dedup against the eSCL entry.
             port_name = _read_prop(storage, _WIA_DIP_PORT_NAME, "")
-            pnp_id = _read_prop(storage, _WIA_DIP_PNP_ID, "")
+            pnp_id = str(_read_prop(storage, _WIA_DIP_PNP_ID, ""))
             uuid = _extract_wsd_uuid(port_name, pnp_id)
+
+            # WIA reports only the driver vendor; read the real manufacturer
+            # and model from the PnP store via the device's interface path.
+            vendor, model = _read_pnp_vendor_model(pnp_id)
 
             scanner = Scanner(
                 name=str(name),
-                vendor=None,
-                model=None,
+                vendor=vendor,
+                model=model,
                 backend=self.backend_name,
                 scanner_id=str(dev_id),
                 uuid=uuid,

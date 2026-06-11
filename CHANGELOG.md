@@ -51,6 +51,12 @@
   no real location is set), `Scanner.location` is now `None`.  `str(scanner)`
   also prefers the full device name over a bare manufacturer, so the
   display label is unchanged in that case.
+- **WIA now reports the real manufacturer and model.**  `Scanner.vendor`
+  and `Scanner.model` were always `None` on Windows because WIA only exposes
+  the *driver* vendor (e.g. "Microsoft" for WSD scanners).  They are now
+  read from the Windows PnP property store (`DEVPKEY_Device_Manufacturer` /
+  `DEVPKEY_Device_Model` via `cfgmgr32`) — e.g. `"EPSON"` / `"WF-C579RB"`.
+  Falls back to `None` when the device does not expose them.
 
 ### Bug fixes
 
