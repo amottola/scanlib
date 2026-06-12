@@ -175,16 +175,26 @@ a PDF with ``build_pdf()``:
 Progress Callback
 -----------------
 
-Monitor scan progress with a callback. Return ``False`` to abort:
+Monitor scan progress with a callback. It receives an ``int`` from 0 to 100,
+or ``-1`` while the scanner is working but no percentage is yet available
+(e.g. warming up or feeding a page). Return ``True`` (or ``None``) to
+continue, or ``False`` to abort (which raises :class:`ScanAborted`):
 
 .. code-block:: python
 
    def on_progress(percent: int) -> bool:
-       print(f"Scanning... {percent}%")
+       if percent < 0:
+           print("Scanning...")       # indeterminate
+       else:
+           print(f"Scanning... {percent}%")
        return True  # return False to abort
 
    with scanners[0] as scanner:
        doc = scanner.scan(progress=on_progress)
+
+The same callback is accepted by :meth:`Scanner.scan_pages`. Depending on the
+backend it may run on an internal worker thread, so marshal any GUI updates to
+your own UI thread.
 
 Aborting a Scan
 ---------------

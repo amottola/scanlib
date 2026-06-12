@@ -494,12 +494,25 @@ class Scanner:
         caller can preview or process the page before deciding whether
         to continue scanning.
 
-        *bw_threshold* (0–255) controls the grayscale-to-BW cutoff when
-        *color_mode* is :attr:`ColorMode.BW`.  Pixels with a value
-        **≥ threshold** become white; below become black.  Default is
-        128.
+        :param progress: Optional callback invoked repeatedly while
+            scanning with an ``int`` percentage from 0 to 100, or ``-1``
+            while the scanner is working but no percentage is yet
+            available (e.g. warming up or feeding a page).  Return
+            ``True`` (or ``None``) to continue; returning ``False``
+            aborts the scan and raises :class:`ScanAborted`.  Depending
+            on the backend the callback may run on an internal worker
+            thread, so marshal any GUI updates to your own UI thread.
+        :param next_page: Optional callback for flatbed multi-page scans;
+            called with the number of pages scanned so far after each
+            page.  Return ``True`` to scan another page or ``False`` to
+            stop.  Ignored for feeder sources (which scan every sheet
+            automatically).
+        :param bw_threshold: Grayscale-to-BW cutoff (0–255) used when
+            *color_mode* is :attr:`ColorMode.BW`.  Pixels with a value
+            **≥ threshold** become white; below become black.  Default
+            is 128.
 
-        Parameters are the same as :meth:`scan` except that
+        Other parameters are the same as :meth:`scan` except that
         *image_format* and *jpeg_quality* are not applicable here.
         """
         if not self._is_open:
@@ -601,22 +614,27 @@ class Scanner:
         When *source* is :attr:`ScanSource.FEEDER`, all pages in the
         document feeder are scanned.  Otherwise a single page is scanned.
 
-        When *next_page* is provided and the source is not a feeder,
-        the callback is called after each page with the number of pages
-        scanned so far.  Return ``True`` to scan another page or ``False``
-        to stop.
-
-        *image_format* selects the encoding for page images inside the
-        PDF: :attr:`ImageFormat.JPEG` (smaller files) or
-        :attr:`ImageFormat.PNG` (lossless).  When not specified, PNG is
-        used for BW mode (since 1-bit packs much smaller than JPEG) and
-        JPEG for everything else.
-
-        *jpeg_quality* (1–100) controls JPEG compression quality; ignored
-        when *image_format* is PNG.
-
-        *bw_threshold* (0–255) controls the grayscale-to-BW cutoff when
-        *color_mode* is :attr:`ColorMode.BW`.  Default is 128.
+        :param progress: Optional callback invoked repeatedly while
+            scanning with an ``int`` percentage from 0 to 100, or ``-1``
+            while the scanner is working but no percentage is yet
+            available.  Return ``True`` (or ``None``) to continue;
+            returning ``False`` aborts the scan and raises
+            :class:`ScanAborted`.  May run on an internal worker thread
+            depending on the backend.
+        :param next_page: Optional callback for flatbed multi-page scans,
+            called after each page with the number of pages scanned so
+            far.  Return ``True`` to scan another page or ``False`` to
+            stop.  Ignored for feeder sources, which scan every sheet
+            automatically.
+        :param image_format: Encoding for page images inside the PDF —
+            :attr:`ImageFormat.JPEG` (smaller files) or
+            :attr:`ImageFormat.PNG` (lossless).  When not specified, PNG
+            is used for BW mode (1-bit packs much smaller than JPEG) and
+            JPEG for everything else.
+        :param jpeg_quality: JPEG compression quality (1–100); ignored
+            when *image_format* is PNG.
+        :param bw_threshold: Grayscale-to-BW cutoff (0–255) used when
+            *color_mode* is :attr:`ColorMode.BW`.  Default is 128.
         """
         pages = self.scan_pages(
             dpi=dpi,
