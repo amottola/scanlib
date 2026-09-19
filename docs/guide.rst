@@ -333,6 +333,10 @@ subclasses are:
        callback returning ``False``, or at the device.
    * - :class:`ScannerNotOpenError`
      - A scan/capability call was made before :meth:`Scanner.open`.
+   * - :class:`MainThreadUnavailableError`
+     - macOS only: the call was made from a background thread while the
+       main thread was not running an ``NSRunLoop``, so ImageCaptureCore
+       could never deliver its callbacks.  See :ref:`macos-run-loop`.
    * - :class:`ScanError`
      - Any other scanning failure.
 
@@ -367,3 +371,34 @@ require it (macOS ImageCaptureCore, Windows WIA).
 Note that ``progress`` callbacks may execute on an internal thread.
 If your callback updates a GUI, dispatch to your UI thread accordingly.
 The ``next_page`` callback always runs on the caller's thread.
+
+.. _macos-run-loop:
+
+macOS: the main thread must run an NSRunLoop
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ImageCaptureCore delivers **all** of its callbacks to the process's main
+thread, so the macOS backend has to dispatch its calls there and wait for
+the result.  That only completes while the main thread is servicing an
+``NSRunLoop``.  Calling scanlib from a background thread is fine when the
+main thread runs one — a Cocoa app, or any app whose main loop is
+Cocoa-backed.  It is *not* fine in a headless script, or in a GUI app
+running a non-Cocoa backend (for example Qt's ``offscreen`` platform
+plugin): there the dispatch can never complete, and the call fails with
+:class:`MainThreadUnavailableError` once its ``timeout`` is spent.
+
+This is a limitation of ImageCaptureCore, not something scanlib can work
+around: the callbacks go to the main thread specifically, not to whichever
+thread started the device browser, so running a private run loop on a
+worker thread does not help.
+
+To scan from a headless process on macOS, use the eSCL backend instead —
+it talks HTTP directly to network scanners and needs no run loop:
+
+.. code-block:: bash
+
+   SCANLIB_ESCL=1 python my_headless_script.py
+
+.. warning:: The backend is selected once, on first use, so
+   ``SCANLIB_ESCL`` must be set before the first scanlib call (setting it
+   in the environment, or via ``os.environ`` at startup, both work).

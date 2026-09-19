@@ -74,3 +74,5 @@ Exceptions
 .. autoclass:: scanlib.NoScannerFoundError
 
 .. autoclass:: scanlib.BackendNotAvailableError
+
+.. autoclass:: scanlib.MainThreadUnavailableError

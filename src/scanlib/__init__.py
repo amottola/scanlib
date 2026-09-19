@@ -16,6 +16,7 @@ from ._types import (
     ColorMode,
     FeederEmptyError,
     ImageFormat,
+    MainThreadUnavailableError,
     NoScannerFoundError,
     ScanArea,
     ScanAborted,
@@ -59,6 +60,7 @@ __all__ = [
     "FeederEmptyError",
     "NoScannerFoundError",
     "BackendNotAvailableError",
+    "MainThreadUnavailableError",
 ]
 
 
@@ -271,6 +273,15 @@ def list_scanners(
     The returned :class:`Scanner` objects are lightweight — no device sessions
     are opened.  Use :meth:`Scanner.open` (or the context-manager protocol)
     to start a session before scanning.
+
+    .. note:: **macOS requires a main-thread run loop.**  ImageCaptureCore
+       delivers all of its callbacks to the main thread, so the macOS
+       backend can only make progress while that thread is running an
+       ``NSRunLoop``.  Calling from a background thread of a headless
+       process — or of a GUI app that is not running a Cocoa event loop —
+       raises :class:`MainThreadUnavailableError` once *timeout* is spent.
+       Set ``SCANLIB_ESCL=1`` to discover network scanners over eSCL
+       instead, which needs no run loop and works headless.
     """
     return _get_backend().list_scanners(timeout=timeout, cancel=cancel)
 

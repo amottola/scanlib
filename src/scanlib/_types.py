@@ -69,6 +69,32 @@ class ScannerNotOpenError(ScanLibError):
     """Operation requires an open scanner session."""
 
 
+class MainThreadUnavailableError(ScanLibError):
+    """The main thread never serviced its run loop, so a call could not complete.
+
+    macOS only.  ImageCaptureCore delivers every one of its callbacks to
+    the main thread, so scanlib has to dispatch its calls there and wait
+    for the result.  That dispatch only completes while the main thread
+    is running an ``NSRunLoop`` — which a headless process, or a GUI
+    toolkit not running a Cocoa event loop, never does.
+
+    Such calls used to block forever; they now raise this error once the
+    wait budget is spent.  Either run an ``NSRunLoop`` on the main
+    thread, or set ``SCANLIB_ESCL=1`` to reach network scanners over the
+    eSCL backend, which needs no run loop at all.
+    """
+
+    _DEFAULT = (
+        "Timed out waiting for the macOS main thread. ImageCaptureCore "
+        "delivers its callbacks there, so the main thread must be running "
+        "an NSRunLoop. Run one, or set SCANLIB_ESCL=1 to use the eSCL "
+        "backend, which does not need a run loop."
+    )
+
+    def __init__(self, message: str = _DEFAULT) -> None:
+        super().__init__(message)
+
+
 # --- Enums ---
 
 

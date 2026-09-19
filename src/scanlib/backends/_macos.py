@@ -12,6 +12,7 @@ from Foundation import (
     NSDefaultRunLoopMode,
     NSObject,
     NSRunLoop,
+    NSRunLoopCommonModes,
 )
 
 from .._types import (
@@ -20,6 +21,7 @@ from .._types import (
     ColorMode,
     normalize_resolutions,
     FeederEmptyError,
+    MainThreadUnavailableError,
     ScanArea,
     ScanAborted,
     ScanError,
@@ -449,6 +451,7 @@ def _make_invoker_cls() -> type:
             self.args = ()
             self.result = None
             self.error = None
+            self.done = None
             return self
 
         def invoke_(self, _sender: object) -> None:
@@ -456,11 +459,64 @@ def _make_invoker_cls() -> type:
                 self.result = self.func(*self.args)
             except BaseException as exc:
                 self.error = exc
+            finally:
+                # The dispatcher may have given up on us and moved on; in
+                # that case it parked a reference here to keep us alive
+                # until this ran.  Drop it now.
+                _abandoned_invokers.discard(self)
+                if self.done is not None:
+                    self.done.set()
 
     return _Invoker
 
 
 _InvokerCls: type | None = None
+
+# Invokers whose dispatch timed out.  The main thread may still run them
+# later, so they are held here (rather than being garbage-collected out
+# from under ObjC) until they fire.
+_abandoned_invokers: set = set()
+
+# Upper bound on a single main-thread dispatch.  Individual
+# ImageCaptureCore calls just enqueue work and return in milliseconds;
+# the only reason for a longer wait is a main thread that is busy, or one
+# that is not running a run loop at all.  Exceeding this raises
+# MainThreadUnavailableError rather than blocking forever.
+MAIN_DISPATCH_TIMEOUT = 10.0
+
+# Smallest budget any single dispatch gets, even once the caller's
+# overall deadline has been spent.  Without it the final dispatch of an
+# operation (e.g. building the scanner list after discovery used up the
+# whole timeout) would be refused before it ever got a chance to run.
+_MIN_DISPATCH_TIMEOUT = 0.25
+
+# Grace period added to the caller-side wait in _call, on top of the
+# budget the worker itself is held to.  The worker stops on its own
+# deadline; this is only a backstop.
+_DISPATCH_GRACE = 5.0
+
+# Per-thread dispatch budget, published by _call onto the worker thread
+# it spawns and read back by _on_main.
+_dispatch_ctx = threading.local()
+
+
+def _dispatch_budget() -> tuple[float, threading.Event | None]:
+    """Return the ``(timeout, cancel)`` budget for one main-thread dispatch.
+
+    :meth:`MacOSBackend._call` publishes the caller's deadline and cancel
+    event onto the worker thread it spawns; this reads them back so
+    ``_on_main`` does not need them threaded through its ~20 call sites.
+    Outside such a worker — ``abort_scan`` dispatches directly from the
+    caller's thread — there is no ambient context and the default
+    per-dispatch bound applies.
+    """
+    deadline = getattr(_dispatch_ctx, "deadline", None)
+    cancel = getattr(_dispatch_ctx, "cancel", None)
+    timeout = MAIN_DISPATCH_TIMEOUT
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        timeout = min(timeout, max(remaining, _MIN_DISPATCH_TIMEOUT))
+    return timeout, cancel
 
 
 def _safe_str(dev, attr: str) -> str | None:
@@ -522,11 +578,18 @@ class MacOSBackend:
     # --- Main-thread dispatch helpers ---
 
     def _on_main(self, func, *args):
-        """Execute *func* on the main thread, blocking until done.
+        """Execute *func* on the main thread and return its result.
 
-        Individual ICC API calls are short (they just enqueue work),
-        so this returns quickly and does not block the main thread
-        for an extended period.
+        ImageCaptureCore delivers every callback to the main thread, so
+        its API calls have to be made there.  Individual ICC calls are
+        short — they just enqueue work — but the dispatch only completes
+        while the main thread is servicing a run loop.  A headless
+        process, or a GUI toolkit not running a Cocoa event loop, never
+        does, so the wait is bounded: on expiry this raises
+        :class:`MainThreadUnavailableError` rather than blocking forever.
+
+        The budget comes from the ambient dispatch context (see
+        :func:`_dispatch_budget`).
         """
         if threading.current_thread() is threading.main_thread():
             return func(*args)
@@ -535,30 +598,65 @@ class MacOSBackend:
         if _InvokerCls is None:
             _InvokerCls = _make_invoker_cls()
 
+        done = threading.Event()
         invoker = _InvokerCls.alloc().init()
         invoker.func = func
         invoker.args = args
-        invoker.performSelectorOnMainThread_withObject_waitUntilDone_(
+        invoker.done = done
+
+        # waitUntilDone:NO — a blocking dispatch cannot be given up on,
+        # which is exactly the hang being avoided here.  Queue in the
+        # common run-loop modes so the call still lands while the main
+        # thread sits in a modal or event-tracking loop.
+        invoker.performSelectorOnMainThread_withObject_waitUntilDone_modes_(
             "invoke:",
             None,
-            True,
+            False,
+            [NSRunLoopCommonModes],
         )
+
+        timeout, cancel = _dispatch_budget()
+        if not wait_or_cancel(done, timeout, cancel, poll_interval=0.02):
+            # The main thread may still run the invocation later on, so
+            # hand the invoker over to be kept alive until it fires.
+            _abandoned_invokers.add(invoker)
+            if cancel is not None and cancel.is_set():
+                raise ScanAborted("Cancelled while waiting for the main thread")
+            raise MainThreadUnavailableError()
+
         if invoker.error is not None:
             raise invoker.error
         return invoker.result
 
-    def _call(self, func, *args):
+    def _call(
+        self,
+        func,
+        *args,
+        timeout: float | None = None,
+        cancel: threading.Event | None = None,
+    ):
         """Run *func* on a worker thread; block the caller until done.
 
         If called from the main thread, the NSRunLoop is pumped while
         waiting so that ICC delegate callbacks (and GUI events) continue
-        to be processed.  If called from a background thread, the caller
-        simply blocks on a ``threading.Event``.
+        to be processed.  Off the main thread the caller waits on an
+        event, honouring *cancel* and *timeout*.
+
+        *timeout* is the caller's overall budget; it is also published to
+        the worker so the worker's individual main-thread dispatches
+        cannot outlive it.  ``None`` means "as long as the operation
+        legitimately takes" — a scan or a session open has no meaningful
+        deadline — and is safe because each of the worker's dispatches is
+        bounded in its own right by :meth:`_on_main`.  Cancellation is
+        honoured either way.
         """
         box: dict = {}
         done = threading.Event()
+        deadline = None if timeout is None else time.monotonic() + timeout
 
         def _worker():
+            _dispatch_ctx.deadline = deadline
+            _dispatch_ctx.cancel = cancel
             try:
                 box["value"] = func(*args)
             except BaseException as exc:
@@ -568,11 +666,25 @@ class MacOSBackend:
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
 
+        wait_timeout = float("inf") if timeout is None else timeout + _DISPATCH_GRACE
+
         if threading.current_thread() is threading.main_thread():
+            elapsed = 0.0
             while not done.is_set():
+                if cancel is not None and cancel.is_set():
+                    break
+                if elapsed >= wait_timeout:
+                    break
                 pump_run_loop(0.05)
+                elapsed += 0.05
+            finished = done.is_set()
         else:
-            done.wait()
+            finished = wait_or_cancel(done, wait_timeout, cancel)
+
+        if not finished:
+            if cancel is not None and cancel.is_set():
+                raise ScanAborted("Cancelled")
+            raise MainThreadUnavailableError()
 
         if "error" in box:
             raise box["error"]
@@ -619,7 +731,18 @@ class MacOSBackend:
         cancel: threading.Event | None = None,
     ) -> list[Scanner]:
         with self._lock:
-            scanners = self._call(self._list_scanners_impl, timeout, cancel)
+            try:
+                scanners = self._call(
+                    self._list_scanners_impl,
+                    timeout,
+                    cancel,
+                    timeout=timeout,
+                    cancel=cancel,
+                )
+            except ScanAborted:
+                # Documented contract: a cancelled discovery returns no
+                # scanners rather than raising.
+                return []
         for s in scanners:
             s._backend_impl = self
         return scanners
@@ -648,22 +771,37 @@ class MacOSBackend:
                 time.sleep(0.3)
 
         with self._lock:
-            self._call(_discover)
+            self._call(_discover, timeout=timeout)
 
     def close_scanner(self, scanner: Scanner) -> None:
+        # Deliberately no cancel: abort() leaves _abort_event set until the
+        # next scan clears it, and abort()-then-close() is the normal
+        # teardown path.  Cancelling the close would leak the session.
         with self._lock:
             return self._call(self._close_scanner_impl, scanner)
 
     def abort_scan(self, scanner: Scanner) -> None:
         device = self._devices.get(scanner.id)
-        if device is not None:
+        if device is None:
+            return
+        try:
             self._on_main(device.cancelScan)
+        except MainThreadUnavailableError:
+            # The scanning thread polls ``scanner._abort_event`` itself and
+            # will stop regardless, so a stuck main thread must not turn
+            # abort() into an error for the caller.
+            pass
 
     def scan_pages(
         self, scanner: Scanner, options: ScanOptions
     ) -> Iterator[ScannedPage]:
         with self._lock:
-            pages = self._call(self._scan_pages_impl, scanner, options)
+            pages = self._call(
+                self._scan_pages_impl,
+                scanner,
+                options,
+                cancel=scanner._abort_event,
+            )
         yield from pages
 
     # --- Implementation (runs on worker thread) ---

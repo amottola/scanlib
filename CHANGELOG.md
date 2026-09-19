@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.3.2
+
+### Bug fixes
+
+- **macOS calls no longer hang forever when the main thread isn't running a
+  run loop.** ImageCaptureCore delivers every callback to the main thread, so
+  the macOS backend dispatches its calls there — but it dispatched with
+  `waitUntilDone:YES` and then waited without a bound. In a process whose main
+  thread never services an `NSRunLoop` (a headless script, or a GUI app not
+  running a Cocoa event loop), any call made from a background thread blocked
+  forever, ignoring both `timeout` and `cancel`. At interpreter exit this could
+  deadlock the whole process, since a non-daemon caller (e.g. the thread behind
+  `asyncio.to_thread`) is joined by `threading._shutdown`.
+
+  Every main-thread dispatch is now asynchronous and bounded, and honours the
+  caller's `timeout` and `cancel`. This covers `list_scanners`, `open_scanner`,
+  `close_scanner`, `scan_pages`, `abort_scan`, and the internal device-discovery
+  and polling helpers. Dispatches are also queued in the common run-loop modes,
+  so they still land while the main thread sits in a modal or event-tracking loop.
+
+### Behaviour changes
+
+- **Calls that previously hung now raise `MainThreadUnavailableError`** (new,
+  exported, a subclass of `ScanLibError`) once their wait budget is spent.
+  Callers that relied on the old behaviour were relying on a hang, but code that
+  catches only `ScanError` will not catch this — catch `ScanLibError`, or
+  `MainThreadUnavailableError` specifically, if you call from a background thread
+  on macOS. A cancelled `list_scanners()` still returns `[]` as documented, and
+  `abort()` still succeeds even when the main thread is stuck.
+
+  **This is a fast failure, not a headless fix.** ImageCaptureCore delivers its
+  callbacks to the main thread specifically — not to whichever thread started the
+  browser, and not to any run loop scanlib could run itself — so a library cannot
+  work around an unresponsive main thread. To scan from a headless process on
+  macOS, set `SCANLIB_ESCL=1` to reach network scanners through the eSCL backend,
+  which needs no run loop at all.
+
 ## 1.3.1
 
 ### New features
